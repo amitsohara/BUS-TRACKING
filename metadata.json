@@ -1,0 +1,6 @@
+{
+  "name": "SurakshaVahan - Multi-School Bus Tracking SaaS",
+  "description": "Production multi-tenant school bus fleet tracking, live GPS ingestion, QR attendance, and parent portal for Indian schools.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
