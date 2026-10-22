@@ -520,6 +520,18 @@ function runMigrations() {
     db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_notifications_idempotency_key ON notifications(idempotency_key) WHERE idempotency_key IS NOT NULL;`);
   } catch (e) {
   }
+  try {
+    const userCount = db.prepare("SELECT COUNT(*) as count FROM users").get();
+    if (userCount.count === 0) {
+      const defaultAdminHash = "$2b$10$LeRo7dJbM.Kz/jvFZ.TZaOG2JlepkVNYqWIQ07PmN6un5V8UnMq9O";
+      db.prepare(`
+        INSERT INTO users (id, email, password_hash, full_name, phone, system_role, is_active)
+        VALUES ('usr_plat_admin', 'platform.admin@surakshavahan.in', ?, 'Platform Super Admin', '+91 98100 11223', 'PLATFORM_ADMIN', 1)
+      `).run(defaultAdminHash);
+      console.log("[Database] Empty user database detected: Created default Platform Admin (platform.admin@surakshavahan.in / Admin@12345).");
+    }
+  } catch (err) {
+  }
   console.log("[Database] Schema migrations executed successfully.");
 }
 
