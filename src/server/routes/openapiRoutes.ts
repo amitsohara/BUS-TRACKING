@@ -175,9 +175,15 @@ const openApiSpec = {
         },
       },
     },
+    '/trips/driver/active': {
+      get: {
+        summary: 'Get active or upcoming trip assigned to the authenticated driver (Driver App home screen)',
+        responses: { 200: { description: 'Assigned trip details, stops, and passenger roster' } },
+      },
+    },
     '/trips/{tripId}/locations': {
       post: {
-        summary: 'Ingest live GPS telemetry from driver or on-bus device (Flutter client endpoint)',
+        summary: 'Ingest live GPS telemetry from driver or on-bus device (Driver App endpoint)',
         parameters: [{ name: 'tripId', in: 'path', required: true, schema: { type: 'string' } }],
         requestBody: {
           required: true,
@@ -186,9 +192,33 @@ const openApiSpec = {
         responses: { 201: { description: 'Telemetry recorded and broadcast via WebSocket' } },
       },
     },
+    '/trips/{tripId}/locations/batch': {
+      post: {
+        summary: 'Batch ingest queued GPS coordinates upon network reconnection (Driver App offline sync)',
+        parameters: [{ name: 'tripId', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: { 201: { description: 'Batch telemetry ingested' } },
+      },
+    },
+    '/trips/{tripId}/stops/{stopId}/status': {
+      post: {
+        summary: 'Update stop progress checkpoint (ARRIVED, DEPARTED, SKIPPED) by Driver',
+        parameters: [
+          { name: 'tripId', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'stopId', in: 'path', required: true, schema: { type: 'string' } },
+        ],
+        responses: { 200: { description: 'Stop status updated' } },
+      },
+    },
+    '/trips/{tripId}/alert': {
+      post: {
+        summary: 'Broadcast delay, breakdown, or safety alert to all guardians on trip (Driver App)',
+        parameters: [{ name: 'tripId', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: { 200: { description: 'Alert dispatched to guardians' } },
+      },
+    },
     '/trips/{tripId}/attendance/scan': {
       post: {
-        summary: 'Scan student opaque QR badge for boarding or drop-off with duplicate protection',
+        summary: 'Scan student opaque QR badge for boarding or drop-off with duplicate protection (Driver App)',
         parameters: [{ name: 'tripId', in: 'path', required: true, schema: { type: 'string' } }],
         requestBody: {
           required: true,
@@ -202,8 +232,34 @@ const openApiSpec = {
     },
     '/parents/children': {
       get: {
-        summary: 'List children explicitly linked to authenticated parent with live bus status',
+        summary: 'List children linked to authenticated parent with live bus location, route, and ETA (Parent App)',
         responses: { 200: { description: 'Children with assigned routes and live tracking' } },
+      },
+    },
+    '/parents/children/{studentId}/attendance': {
+      get: {
+        summary: 'Historical attendance records for child with stop names and timestamps (Parent App)',
+        parameters: [{ name: 'studentId', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: { 200: { description: 'Attendance event history' } },
+      },
+    },
+    '/parents/notifications': {
+      get: {
+        summary: 'Get in-app transit notifications and alerts for authenticated parent',
+        responses: { 200: { description: 'Notification list' } },
+      },
+    },
+    '/parents/device-token': {
+      post: {
+        summary: 'Register FCM/APNs push notification token (Parent App & Driver App)',
+        responses: { 200: { description: 'Token registered' } },
+      },
+    },
+    '/students/{id}/qr-badge': {
+      get: {
+        summary: 'Generate digital ID pass and printable opaque QR code (DPDP parent-scoped)',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: { 200: { description: 'QR pass data and image' } },
       },
     },
     '/reports/attendance-csv': {

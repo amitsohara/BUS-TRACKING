@@ -335,9 +335,31 @@ export function runMigrations() {
       updated_at TEXT DEFAULT CURRENT_TIMESTAMP
     );
 
+    -- 22. School Administrator Invitations & Onboarding
+    CREATE TABLE IF NOT EXISTS school_invitations (
+      id TEXT PRIMARY KEY,
+      school_id TEXT NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+      email TEXT NOT NULL,
+      full_name TEXT NOT NULL,
+      role TEXT DEFAULT 'SCHOOL_ADMIN',
+      token_hash TEXT UNIQUE NOT NULL,
+      token_hint TEXT NOT NULL,
+      invited_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+      status TEXT DEFAULT 'PENDING', -- PENDING, ACCEPTED, REVOKED, EXPIRED
+      delivery_status TEXT DEFAULT 'DISABLED_NO_GATEWAY', -- DELIVERED_EMAIL, DISABLED_NO_GATEWAY
+      delivery_provider TEXT DEFAULT 'SURAKSHAVAHAN_INTERNAL',
+      last_sent_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      expires_at TEXT NOT NULL,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+
     -- Indexes for High-Performance Multi-Tenant Lookups & Realtime Queries
     CREATE INDEX IF NOT EXISTS idx_memberships_user ON school_memberships(user_id);
     CREATE INDEX IF NOT EXISTS idx_memberships_school ON school_memberships(school_id);
+    CREATE INDEX IF NOT EXISTS idx_invitations_token_hash ON school_invitations(token_hash);
+    CREATE INDEX IF NOT EXISTS idx_invitations_school_status ON school_invitations(school_id, status);
+    CREATE INDEX IF NOT EXISTS idx_invitations_email ON school_invitations(email);
     CREATE INDEX IF NOT EXISTS idx_students_school ON students(school_id);
     CREATE INDEX IF NOT EXISTS idx_vehicles_school ON vehicles(school_id);
     CREATE INDEX IF NOT EXISTS idx_drivers_school ON drivers(school_id);
@@ -371,6 +393,13 @@ export function runMigrations() {
   // Ensure backward-compatible columns exist on notifications table
   try {
     db.exec(`ALTER TABLE notifications ADD COLUMN delivery_provider TEXT DEFAULT 'SURAKSHAVAHAN_INTERNAL';`);
+  } catch (e) {
+    // Column already exists
+  }
+
+  // Ensure contact_person column exists on schools table
+  try {
+    db.exec(`ALTER TABLE schools ADD COLUMN contact_person TEXT;`);
   } catch (e) {
     // Column already exists
   }

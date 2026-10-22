@@ -1,6 +1,6 @@
 import { Router, Response } from 'express';
 import { db } from '../db.ts';
-import { authenticate, requireSchoolContext, AuthRequest, logAudit } from '../auth.ts';
+import { authenticate, requireSchoolContext, AuthRequest, logAudit, formatSafeServerError } from '../auth.ts';
 
 export const routeRoutes = Router();
 
@@ -165,7 +165,7 @@ routeRoutes.post(
       return res.status(201).json({ success: true, message: 'Route created successfully', routeId });
     } catch (err: any) {
       db.exec('ROLLBACK;');
-      return res.status(500).json({ success: false, error: 'SERVER_ERROR', message: err.message });
+      return formatSafeServerError(res, err, 'CREATE_ROUTE');
     }
   }
 );

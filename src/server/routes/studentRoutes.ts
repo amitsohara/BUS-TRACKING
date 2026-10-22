@@ -2,7 +2,7 @@ import { Router, Response } from 'express';
 import crypto from 'crypto';
 import QRCode from 'qrcode';
 import { db } from '../db.ts';
-import { authenticate, requireSchoolContext, AuthRequest, logAudit } from '../auth.ts';
+import { authenticate, requireSchoolContext, AuthRequest, logAudit, formatSafeServerError } from '../auth.ts';
 
 export const studentRoutes = Router();
 
@@ -236,8 +236,7 @@ studentRoutes.post(
       });
     } catch (err: any) {
       db.exec('ROLLBACK;');
-      console.error('[Create Student Error]', err);
-      return res.status(500).json({ success: false, error: 'SERVER_ERROR', message: err.message });
+      return formatSafeServerError(res, err, 'CREATE_STUDENT');
     }
   }
 );
@@ -332,7 +331,7 @@ studentRoutes.put(
       return res.json({ success: true, message: 'Student updated successfully' });
     } catch (err: any) {
       db.exec('ROLLBACK;');
-      return res.status(500).json({ success: false, error: 'SERVER_ERROR', message: err.message });
+      return formatSafeServerError(res, err, 'UPDATE_STUDENT');
     }
   }
 );
@@ -340,9 +339,30 @@ studentRoutes.put(
 // GET /api/v1/students/:id/qr-badge - Get QR Badge info and printable QR payload
 studentRoutes.get('/:id/qr-badge', authenticate, requireSchoolContext(), async (req: AuthRequest, res: Response) => {
   const schoolId = req.schoolContext!.schoolId;
+  const studentId = req.params.id;
+
+  // Privacy verification: If requester is PARENT, verify that this student is their child
+  if (req.schoolContext?.role === 'PARENT') {
+    const isLinked = db
+      .prepare(`
+        SELECT 1 FROM student_guardians sg
+        JOIN guardians g ON sg.guardian_id = g.id
+        WHERE sg.student_id = ? AND g.user_id = ?
+      `)
+      .get(studentId, req.user!.id);
+
+    if (!isLinked) {
+      return res.status(403).json({
+        success: false,
+        error: 'ACCESS_DENIED',
+        message: 'DPDP Privacy Protection: You are only authorized to view QR badges for your own registered children.',
+      });
+    }
+  }
+
   const student = db
     .prepare('SELECT id, full_name, admission_number, grade, section, emergency_phone FROM students WHERE id = ? AND school_id = ?')
-    .get(req.params.id, schoolId) as any;
+    .get(studentId, schoolId) as any;
 
   if (!student) {
     return res.status(404).json({ success: false, error: 'STUDENT_NOT_FOUND' });

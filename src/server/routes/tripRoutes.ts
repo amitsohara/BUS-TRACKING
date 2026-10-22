@@ -1,16 +1,112 @@
 import { Router, Response } from 'express';
 import { db } from '../db.ts';
-import { authenticate, requireSchoolContext, AuthRequest, logAudit } from '../auth.ts';
+import { authenticate, requireSchoolContext, AuthRequest, logAudit, formatSafeServerError } from '../auth.ts';
 import { broadcastTripStatusChange } from '../websocket.ts';
 import { dispatchNotification } from '../notificationService.ts';
 
 export const tripRoutes = Router();
 
-// GET /api/v1/trips - List trips with status filters
+// GET /api/v1/trips/driver/active - Dedicated endpoint for Driver App to get assigned live/next trip
+tripRoutes.get(
+  '/driver/active',
+  authenticate,
+  requireSchoolContext(['DRIVER', 'ATTENDANT', 'TRANSPORT_MANAGER', 'SCHOOL_ADMIN', 'PLATFORM_ADMIN']),
+  (req: AuthRequest, res: Response) => {
+    const schoolId = req.schoolContext!.schoolId;
+    const userId = req.user!.id;
+
+    // Find driver record for this user
+    const driver = db
+      .prepare('SELECT id, full_name, phone, license_number FROM drivers WHERE user_id = ? AND school_id = ?')
+      .get(userId, schoolId) as any;
+
+    let query = `
+      SELECT t.*,
+        r.route_code, r.name as route_name, r.description as route_description,
+        v.bus_number, v.registration_number, v.capacity as vehicle_capacity,
+        d.full_name as driver_name, d.phone as driver_phone
+      FROM trips t
+      JOIN routes r ON t.route_id = r.id
+      JOIN vehicles v ON t.vehicle_id = v.id
+      JOIN drivers d ON t.driver_id = d.id
+      WHERE t.school_id = ?
+    `;
+    const params: any[] = [schoolId];
+
+    if (driver) {
+      query += ` AND t.driver_id = ?`;
+      params.push(driver.id);
+    }
+
+    query += ` AND t.status IN ('IN_PROGRESS', 'SCHEDULED')
+      ORDER BY CASE t.status WHEN 'IN_PROGRESS' THEN 1 ELSE 2 END, t.scheduled_start_time ASC
+      LIMIT 1
+    `;
+
+    const trip = db.prepare(query).get(...params) as any;
+    if (!trip) {
+      return res.json({
+        success: true,
+        hasActiveTrip: false,
+        message: 'No active or scheduled trips assigned today.',
+        driver: driver || null,
+      });
+    }
+
+    // Stops
+    const stops = db
+      .prepare(`
+        SELECT ts.*, rs.stop_name, rs.landmark, rs.latitude, rs.longitude, rs.morning_scheduled_time, rs.evening_scheduled_time, rs.geofence_radius_meters
+        FROM trip_stops ts
+        JOIN route_stops rs ON ts.route_stop_id = rs.id
+        WHERE ts.trip_id = ?
+        ORDER BY ts.stop_order ASC
+      `)
+      .all(trip.id);
+
+    // Expected students for this route based on trip_type
+    const stopIdColumn = trip.trip_type === 'EVENING_DROP' ? 'ta.evening_stop_id' : 'ta.morning_stop_id';
+    const routeIdColumn = trip.trip_type === 'EVENING_DROP' ? 'ta.evening_route_id' : 'ta.morning_route_id';
+
+    const expectedStudents = db
+      .prepare(`
+        SELECT s.id, s.admission_number, s.full_name, s.grade, s.section, s.emergency_phone,
+          rs.id as assigned_stop_id, rs.stop_name as assigned_stop_name, rs.sequence_order as stop_sequence,
+          (SELECT ae.event_type FROM attendance_events ae WHERE ae.trip_id = ? AND ae.student_id = s.id AND ae.event_type = 'BOARDING' LIMIT 1) as boarding_status,
+          (SELECT ae.scanned_at FROM attendance_events ae WHERE ae.trip_id = ? AND ae.student_id = s.id AND ae.event_type = 'BOARDING' LIMIT 1) as boarded_at,
+          (SELECT ae.scan_method FROM attendance_events ae WHERE ae.trip_id = ? AND ae.student_id = s.id AND ae.event_type = 'BOARDING' LIMIT 1) as boarding_method,
+          (SELECT ae.event_type FROM attendance_events ae WHERE ae.trip_id = ? AND ae.student_id = s.id AND ae.event_type = 'DROP_OFF' LIMIT 1) as dropoff_status,
+          (SELECT ae.scanned_at FROM attendance_events ae WHERE ae.trip_id = ? AND ae.student_id = s.id AND ae.event_type = 'DROP_OFF' LIMIT 1) as dropped_at
+        FROM transport_assignments ta
+        JOIN students s ON ta.student_id = s.id
+        JOIN route_stops rs ON ${stopIdColumn} = rs.id
+        WHERE ${routeIdColumn} = ? AND ta.is_active = 1 AND s.school_id = ?
+        ORDER BY rs.sequence_order ASC, s.full_name ASC
+      `)
+      .all(trip.id, trip.id, trip.id, trip.id, trip.id, trip.route_id, schoolId);
+
+    const latestLocation = db
+      .prepare('SELECT * FROM bus_locations WHERE trip_id = ? ORDER BY recorded_at DESC LIMIT 1')
+      .get(trip.id);
+
+    return res.json({
+      success: true,
+      hasActiveTrip: true,
+      driver: driver || { id: trip.driver_id, full_name: trip.driver_name, phone: trip.driver_phone },
+      trip,
+      stops,
+      expectedStudents,
+      latestLocation,
+    });
+  }
+);
+
+// GET /api/v1/trips - List trips with status and driver filters
 tripRoutes.get('/', authenticate, requireSchoolContext(), (req: AuthRequest, res: Response) => {
   const schoolId = req.schoolContext!.schoolId;
   const status = req.query.status as string; // IN_PROGRESS, SCHEDULED, COMPLETED, CANCELLED
   const date = (req.query.date as string) || '';
+  const driverId = (req.query.driverId as string) || '';
 
   let query = `
     SELECT t.*,
@@ -41,6 +137,18 @@ tripRoutes.get('/', authenticate, requireSchoolContext(), (req: AuthRequest, res
   if (date) {
     query += ` AND t.trip_date = ?`;
     params.push(date);
+  }
+
+  if (driverId) {
+    query += ` AND t.driver_id = ?`;
+    params.push(driverId);
+  } else if (req.schoolContext?.role === 'DRIVER') {
+    // If authenticated user is driver and no explicit driverId provided, filter by driver's own ID
+    const driver = db.prepare('SELECT id FROM drivers WHERE user_id = ? AND school_id = ?').get(req.user!.id, schoolId) as any;
+    if (driver) {
+      query += ` AND t.driver_id = ?`;
+      params.push(driver.id);
+    }
   }
 
   query += ` ORDER BY CASE t.status WHEN 'IN_PROGRESS' THEN 1 WHEN 'SCHEDULED' THEN 2 ELSE 3 END, t.created_at DESC`;
@@ -206,7 +314,7 @@ tripRoutes.post(
       return res.status(201).json({ success: true, message: 'Trip scheduled successfully', tripId });
     } catch (err: any) {
       db.exec('ROLLBACK;');
-      return res.status(500).json({ success: false, error: 'SERVER_ERROR', message: err.message });
+      return formatSafeServerError(res, err, 'SCHEDULE_TRIP');
     }
   }
 );
@@ -445,3 +553,154 @@ tripRoutes.post(
     return res.json({ success: true, message: 'Trip marked as cancelled.' });
   }
 );
+
+// POST /api/v1/trips/:id/stops/:stopId/status - Update Stop Progress (ARRIVED, DEPARTED, SKIPPED)
+tripRoutes.post(
+  '/:id/stops/:stopId/status',
+  authenticate,
+  requireSchoolContext(['DRIVER', 'ATTENDANT', 'TRANSPORT_MANAGER', 'SCHOOL_ADMIN', 'PLATFORM_ADMIN']),
+  (req: AuthRequest, res: Response) => {
+    const schoolId = req.schoolContext!.schoolId;
+    const { id: tripId, stopId } = req.params;
+    const { status, notes } = req.body; // ARRIVED, DEPARTED, SKIPPED, PENDING
+
+    if (!['ARRIVED', 'DEPARTED', 'SKIPPED', 'PENDING'].includes(status)) {
+      return res.status(400).json({
+        success: false,
+        error: 'INVALID_STATUS',
+        message: 'Status must be ARRIVED, DEPARTED, SKIPPED, or PENDING.',
+      });
+    }
+
+    const trip = db.prepare('SELECT id, status FROM trips WHERE id = ? AND school_id = ?').get(tripId, schoolId) as any;
+    if (!trip) {
+      return res.status(404).json({ success: false, error: 'TRIP_NOT_FOUND' });
+    }
+
+    const tripStop = db
+      .prepare('SELECT * FROM trip_stops WHERE trip_id = ? AND (id = ? OR route_stop_id = ?)')
+      .get(tripId, stopId, stopId) as any;
+
+    if (!tripStop) {
+      return res.status(404).json({ success: false, error: 'STOP_NOT_FOUND', message: 'Stop not associated with this trip.' });
+    }
+
+    const arrivedAt = status === 'ARRIVED' ? new Date().toISOString() : tripStop.arrived_at;
+    const departedAt = status === 'DEPARTED' ? new Date().toISOString() : tripStop.departed_at;
+
+    db.prepare(`
+      UPDATE trip_stops SET
+        status = ?,
+        arrived_at = COALESCE(?, arrived_at),
+        departed_at = COALESCE(?, departed_at),
+        notes = COALESCE(?, notes)
+      WHERE id = ?
+    `).run(status, arrivedAt, departedAt, notes || null, tripStop.id);
+
+    broadcastTripStatusChange(tripId, trip.status, {
+      stopEvent: {
+        stopId: tripStop.id,
+        routeStopId: tripStop.route_stop_id,
+        status,
+        arrivedAt,
+        departedAt,
+      },
+    });
+
+    return res.json({
+      success: true,
+      message: `Stop status updated to ${status}.`,
+      stop: {
+        id: tripStop.id,
+        routeStopId: tripStop.route_stop_id,
+        status,
+        arrivedAt,
+        departedAt,
+      },
+    });
+  }
+);
+
+// POST /api/v1/trips/:id/alert - Broadcast Safety / Delay / Breakdown Alert
+tripRoutes.post(
+  '/:id/alert',
+  authenticate,
+  requireSchoolContext(['DRIVER', 'ATTENDANT', 'TRANSPORT_MANAGER', 'SCHOOL_ADMIN', 'PLATFORM_ADMIN']),
+  async (req: AuthRequest, res: Response) => {
+    const schoolId = req.schoolContext!.schoolId;
+    const tripId = req.params.id;
+    const { alertType, message, delayMinutes } = req.body;
+
+    if (!alertType || !message) {
+      return res.status(400).json({
+        success: false,
+        error: 'VALIDATION_ERROR',
+        message: 'alertType and message are required.',
+      });
+    }
+
+    const trip = db
+      .prepare(`
+        SELECT t.*, r.name as route_name, v.bus_number
+        FROM trips t
+        JOIN routes r ON t.route_id = r.id
+        JOIN vehicles v ON t.vehicle_id = v.id
+        WHERE t.id = ? AND t.school_id = ?
+      `)
+      .get(tripId, schoolId) as any;
+
+    if (!trip) {
+      return res.status(404).json({ success: false, error: 'TRIP_NOT_FOUND' });
+    }
+
+    const title =
+      alertType === 'DELAY'
+        ? `Bus Delay Notice: Bus ${trip.bus_number} (${delayMinutes || 15} mins)`
+        : `Transit Notice: Bus ${trip.bus_number} (${alertType})`;
+
+    // Find parents of students assigned to this route
+    const stopCol = trip.trip_type === 'EVENING_DROP' ? 'evening_route_id' : 'morning_route_id';
+    const parents = db
+      .prepare(`
+        SELECT DISTINCT g.user_id, s.full_name as student_name
+        FROM transport_assignments ta
+        JOIN students s ON ta.student_id = s.id
+        JOIN student_guardians sg ON s.id = sg.student_id
+        JOIN guardians g ON sg.guardian_id = g.id
+        WHERE ta.${stopCol} = ? AND ta.is_active = 1 AND g.user_id IS NOT NULL
+      `)
+      .all(trip.route_id) as any[];
+
+    for (const p of parents) {
+      await dispatchNotification({
+        schoolId,
+        userId: p.user_id,
+        title,
+        message: `${message} (Affected student: ${p.student_name})`,
+        notificationType: alertType,
+        relatedTripId: tripId,
+        channel: 'IN_APP',
+      });
+    }
+
+    broadcastTripStatusChange(tripId, trip.status, {
+      alert: { alertType, message, delayMinutes, timestamp: new Date().toISOString() },
+    });
+
+    logAudit({
+      schoolId,
+      userId: req.user?.id,
+      action: `TRIP_ALERT_${alertType}`,
+      entityType: 'TRIP',
+      entityId: tripId,
+      newValues: { alertType, message, delayMinutes },
+    });
+
+    return res.json({
+      success: true,
+      message: `Alert dispatched to ${parents.length} registered guardians.`,
+      recipientsCount: parents.length,
+    });
+  }
+);
+

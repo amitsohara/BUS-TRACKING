@@ -1,6 +1,6 @@
 import { Router, Response } from 'express';
 import { db } from '../db.ts';
-import { authenticate, requireSchoolContext, AuthRequest, logAudit } from '../auth.ts';
+import { authenticate, requireSchoolContext, AuthRequest, logAudit, formatSafeServerError } from '../auth.ts';
 
 export const reportRoutes = Router();
 
@@ -228,8 +228,7 @@ reportRoutes.get(
 
       return res.json({ success: true, manualOverrides, speedAlerts, allEvents });
     } catch (err: any) {
-      console.error('[Safety Exceptions Error]', err);
-      return res.status(500).json({ success: false, error: 'SERVER_ERROR', message: err.message || 'Failed to fetch safety exceptions' });
+      return formatSafeServerError(res, err, 'FETCH_SAFETY_EXCEPTIONS');
     }
   }
 );

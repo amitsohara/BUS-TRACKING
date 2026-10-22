@@ -1,6 +1,7 @@
 import React from 'react';
 import {
   LayoutDashboard,
+  Building2,
   Radio,
   HeartHandshake,
   Bus,
@@ -17,11 +18,17 @@ interface SidebarProps {
   currentView: string;
   onNavigate: (view: string) => void;
   userRole?: string;
+  systemRole?: string;
 }
 
-export const Sidebar: React.FC<SidebarProps> = ({ currentView, onNavigate, userRole }) => {
+export const Sidebar: React.FC<SidebarProps> = ({ currentView, onNavigate, userRole, systemRole }) => {
+  const isPlatformAdmin = systemRole === 'PLATFORM_ADMIN';
+
   const navItems = [
     { id: 'DASHBOARD', label: 'Dashboard', icon: LayoutDashboard },
+    ...(isPlatformAdmin
+      ? [{ id: 'SCHOOLS', label: 'School Management', icon: Building2, adminOnly: true }]
+      : []),
     { id: 'DRIVER_CONSOLE', label: 'Driver GPS & Scan', icon: Radio, highlight: true },
     { id: 'PARENT_PORTAL', label: 'Parent Safety Portal', icon: HeartHandshake, highlight: true },
     { id: 'TRIPS', label: 'Trips & Dispatch', icon: Bus },

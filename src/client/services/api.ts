@@ -125,9 +125,97 @@ class ApiService {
     return this.request('/auth/logout', { method: 'POST' });
   }
 
+  deleteAccount() {
+    return this.request<{ success: boolean; message: string }>('/auth/me', { method: 'DELETE' });
+  }
+
   // Schools & Stats
-  getSchools() {
-    return this.request<{ success: boolean; schools: any[] }>('/schools');
+  getSchools(params: { search?: string; status?: string; page?: number; limit?: number } = {}) {
+    const query = new URLSearchParams();
+    if (params.search) query.set('search', params.search);
+    if (params.status) query.set('status', params.status);
+    if (params.page) query.set('page', String(params.page));
+    if (params.limit) query.set('limit', String(params.limit));
+    const qs = query.toString();
+    return this.request<{ success: boolean; schools: any[]; totalCount?: number; pagination?: any }>(`/schools${qs ? `?${qs}` : ''}`);
+  }
+
+  getSchoolDetails(id: string) {
+    return this.request<{
+      success: boolean;
+      school: any;
+      settings: any;
+      subscription: any;
+      administrators: any[];
+      invitations: any[];
+      stats: any;
+      auditHistory: any[];
+    }>(`/schools/${id}`);
+  }
+
+  createSchool(payload: any) {
+    return this.request<{ success: boolean; message: string; school: any; initialInvitation?: any }>('/schools', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  updateSchool(id: string, payload: any) {
+    return this.request<{ success: boolean; message: string; school: any }>(`/schools/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  updateSchoolStatus(id: string, status: 'ACTIVE' | 'SUSPENDED' | 'TRIAL') {
+    return this.request<{ success: boolean; message: string; status: string }>(`/schools/${id}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status }),
+    });
+  }
+
+  createSchoolAdmin(schoolId: string, payload: { email: string; fullName: string; phone?: string; password?: string }) {
+    return this.request<{ success: boolean; message: string; user: any }>(`/schools/${schoolId}/admins`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  inviteSchoolAdmin(schoolId: string, payload: { email: string; fullName: string; role?: string }) {
+    return this.request<{ success: boolean; message: string; invitation: any }>(`/schools/${schoolId}/admins/invite`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  updateAdminStatus(schoolId: string, userId: string, status: 'ACTIVE' | 'INACTIVE') {
+    return this.request<{ success: boolean; message: string; membershipStatus: string }>(`/schools/${schoolId}/admins/${userId}/status`, {
+      method: 'POST',
+      body: JSON.stringify({ status }),
+    });
+  }
+
+  revokeInvitation(schoolId: string, invitationId: string) {
+    return this.request<{ success: boolean; message: string }>(`/schools/${schoolId}/invitations/${invitationId}/revoke`, {
+      method: 'POST',
+    });
+  }
+
+  resendInvitation(schoolId: string, invitationId: string) {
+    return this.request<{ success: boolean; message: string; invitation: any }>(`/schools/${schoolId}/invitations/${invitationId}/resend`, {
+      method: 'POST',
+    });
+  }
+
+  getInvitationInfo(token: string) {
+    return this.request<{ success: boolean; invitation: any }>(`/auth/invitation-info?token=${encodeURIComponent(token)}`);
+  }
+
+  acceptInvitation(payload: { token: string; password: string; fullName?: string; phone?: string }) {
+    return this.request<any>('/auth/accept-invitation', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
   }
 
   getCurrentSchool() {

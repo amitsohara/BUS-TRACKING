@@ -141,3 +141,64 @@ parentRoutes.post('/notifications/mark-read', authenticate, (req: AuthRequest, r
   }
   return res.json({ success: true });
 });
+
+// POST /api/v1/parents/device-token - Register FCM/APNs push device token for Parent App
+parentRoutes.post('/device-token', authenticate, (req: AuthRequest, res: Response) => {
+  const userId = req.user!.id;
+  const { token, platform } = req.body;
+
+  if (!token) {
+    return res.status(400).json({ success: false, error: 'VALIDATION_ERROR', message: 'Device push token is required.' });
+  }
+
+  const effectivePlatform = ['ANDROID', 'IOS', 'WEB'].includes(platform?.toUpperCase()) ? platform.toUpperCase() : 'ANDROID';
+  const tokenId = `tok_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+
+  db.prepare(`
+    INSERT INTO device_tokens (id, user_id, token, platform, updated_at)
+    VALUES (?, ?, ?, ?, datetime('now'))
+    ON CONFLICT(user_id, token) DO UPDATE SET platform = excluded.platform, updated_at = datetime('now')
+  `).run(tokenId, userId, token.trim(), effectivePlatform);
+
+  return res.json({ success: true, message: 'Device token registered successfully.' });
+});
+
+// GET /api/v1/parents/children/:studentId/attendance - Child's complete attendance event history
+parentRoutes.get('/children/:studentId/attendance', authenticate, (req: AuthRequest, res: Response) => {
+  const userId = req.user!.id;
+  const { studentId } = req.params;
+
+  // Strict DPDP privacy check: Verify parent is linked to this student
+  const linked = db
+    .prepare(`
+      SELECT 1 FROM student_guardians sg
+      JOIN guardians g ON sg.guardian_id = g.id
+      WHERE sg.student_id = ? AND g.user_id = ?
+    `)
+    .get(studentId, userId);
+
+  if (!linked && req.user!.systemRole !== 'PLATFORM_ADMIN') {
+    return res.status(403).json({
+      success: false,
+      error: 'FORBIDDEN',
+      message: 'Access denied: You are only permitted to view attendance records for your own children.',
+    });
+  }
+
+  const events = db
+    .prepare(`
+      SELECT ae.id, ae.trip_id, ae.event_type, ae.scan_method, ae.scanned_at, ae.verification_status,
+        rs.stop_name, t.trip_type, t.trip_date, v.bus_number, v.registration_number
+      FROM attendance_events ae
+      LEFT JOIN route_stops rs ON ae.stop_id = rs.id
+      JOIN trips t ON ae.trip_id = t.id
+      JOIN vehicles v ON t.vehicle_id = v.id
+      WHERE ae.student_id = ?
+      ORDER BY ae.scanned_at DESC
+      LIMIT 100
+    `)
+    .all(studentId);
+
+  return res.json({ success: true, studentId, count: events.length, attendance: events });
+});
+

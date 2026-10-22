@@ -1,6 +1,6 @@
 import { Router, Response } from 'express';
 import { db } from '../db.ts';
-import { authenticate, requireSchoolContext, AuthRequest } from '../auth.ts';
+import { authenticate, requireSchoolContext, AuthRequest, formatSafeServerError } from '../auth.ts';
 import { broadcastTripLocation } from '../websocket.ts';
 
 export const locationRoutes = Router();
@@ -150,6 +150,112 @@ locationRoutes.post(
       message: 'Location ingested and broadcast successfully',
       location: liveTelemetry,
     });
+  }
+);
+
+// POST /api/v1/trips/:tripId/locations/batch - Batch GPS Sync for Mobile Driver App Offline Reconnect
+locationRoutes.post(
+  '/:tripId/locations/batch',
+  authenticate,
+  requireSchoolContext(['DRIVER', 'TRANSPORT_MANAGER', 'SCHOOL_ADMIN', 'PLATFORM_ADMIN']),
+  (req: AuthRequest, res: Response) => {
+    const schoolId = req.schoolContext!.schoolId;
+    const { tripId } = req.params;
+    const { points } = req.body;
+
+    if (!Array.isArray(points) || points.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'INVALID_PAYLOAD',
+        message: 'points must be a non-empty array of coordinates.',
+      });
+    }
+
+    const trip = db
+      .prepare('SELECT id, school_id, vehicle_id, status FROM trips WHERE id = ? AND school_id = ?')
+      .get(tripId, schoolId) as any;
+
+    if (!trip) {
+      return res.status(404).json({ success: false, error: 'TRIP_NOT_FOUND' });
+    }
+
+    if (trip.status !== 'IN_PROGRESS') {
+      return res.status(400).json({
+        success: false,
+        error: 'TRIP_NOT_ACTIVE',
+        message: 'Cannot ingest GPS points for non-active trips.',
+      });
+    }
+
+    db.exec('BEGIN TRANSACTION;');
+    try {
+      const stmt = db.prepare(`
+        INSERT INTO bus_locations (
+          id, trip_id, vehicle_id, latitude, longitude, speed_kmh, heading,
+          accuracy_meters, altitude, recorded_at, ingested_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+      `);
+
+      let lastTelemetry: any = null;
+      let validCount = 0;
+
+      for (const p of points) {
+        const lat = parseFloat(p.latitude);
+        const lng = parseFloat(p.longitude);
+        if (isNaN(lat) || isNaN(lng) || lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+          continue;
+        }
+
+        const locId = `loc_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+        const recordedTimestamp = p.recordedAt || new Date().toISOString();
+        const speed = p.speedKmh !== undefined ? Math.max(0, parseFloat(p.speedKmh)) : 0;
+        const hdg = p.heading !== undefined ? parseFloat(p.heading) : 0;
+        const acc = p.accuracyMeters !== undefined ? parseFloat(p.accuracyMeters) : 5;
+
+        stmt.run(
+          locId,
+          tripId,
+          trip.vehicle_id,
+          lat,
+          lng,
+          speed,
+          hdg,
+          acc,
+          p.altitude ? parseFloat(p.altitude) : null,
+          recordedTimestamp
+        );
+
+        lastTelemetry = {
+          id: locId,
+          tripId,
+          vehicleId: trip.vehicle_id,
+          latitude: lat,
+          longitude: lng,
+          speedKmh: speed,
+          heading: hdg,
+          accuracyMeters: acc,
+          recordedAt: recordedTimestamp,
+        };
+        validCount++;
+      }
+
+      db.exec('COMMIT;');
+
+      if (lastTelemetry) {
+        broadcastTripLocation(tripId, lastTelemetry);
+      }
+
+      return res.status(201).json({
+        success: true,
+        message: `Successfully ingested ${validCount} GPS points.`,
+        ingestedCount: validCount,
+        latestLocation: lastTelemetry,
+      });
+    } catch (err: any) {
+      db.exec('ROLLBACK;');
+      return formatSafeServerError(res, err, 'BATCH_GPS_INGEST');
+    }
   }
 );
 

@@ -7,7 +7,7 @@ interface LoginViewProps {
 }
 
 export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
-  const [mode, setMode] = useState<'LOGIN' | 'ONBOARD'>('LOGIN');
+  const [mode, setMode] = useState<'LOGIN' | 'ONBOARD' | 'ACCEPT_INVITE'>('LOGIN');
 
   // Environment state
   const [demoModeEnabled, setDemoModeEnabled] = useState(false);
@@ -19,12 +19,38 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Invitation acceptance state
+  const [inviteToken, setInviteToken] = useState<string | null>(null);
+  const [inviteInfo, setInviteInfo] = useState<any>(null);
+  const [inviteFullName, setInviteFullName] = useState('');
+  const [invitePhone, setInvitePhone] = useState('');
+  const [invitePassword, setInvitePassword] = useState('');
+  const [inviteConfirmPassword, setInviteConfirmPassword] = useState('');
+
   useEffect(() => {
+    // Check for invitation token in URL query
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get('token') || params.get('invitation_token');
+    if (token) {
+      setInviteToken(token);
+      api.getInvitationInfo(token)
+        .then((res) => {
+          if (res.success && res.invitation) {
+            setInviteInfo(res.invitation);
+            setInviteFullName(res.invitation.fullName || '');
+            setMode('ACCEPT_INVITE');
+          }
+        })
+        .catch((err) => {
+          setError(err.message || 'Invitation is invalid or has expired');
+        });
+    }
+
     api.getAuthConfig().then((cfg) => {
       setDemoModeEnabled(!!cfg.demoModeEnabled);
       setIsProduction(!!cfg.isProduction);
       // In dev with demo mode enabled, optionally prefill DPS admin for frictionless local evaluation
-      if (cfg.demoModeEnabled) {
+      if (cfg.demoModeEnabled && !token) {
         setEmail('admin@dpsrkp.net');
         setPassword('Admin@12345');
       }
@@ -34,6 +60,37 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
       setIsProduction(true);
     });
   }, []);
+
+  const handleAcceptInvite = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!inviteToken) return;
+    if (invitePassword.length < 8) {
+      setError('Password must be at least 8 characters long.');
+      return;
+    }
+    if (invitePassword !== inviteConfirmPassword) {
+      setError('Passwords do not match.');
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await api.acceptInvitation({
+        token: inviteToken,
+        password: invitePassword,
+        fullName: inviteFullName,
+        phone: invitePhone,
+      });
+      api.setSession(res);
+      // Clean query string
+      window.history.replaceState({}, document.title, window.location.pathname);
+      onLoginSuccess(res);
+    } catch (err: any) {
+      setError(err.message || 'Failed to activate account');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   // Onboard form
   const [schoolName, setSchoolName] = useState('');
@@ -137,24 +194,39 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
         </p>
 
         {/* Tab switcher */}
-        <div className="flex bg-slate-800/80 p-1 rounded-xl mb-4 border border-slate-700/60">
-          <button
-            onClick={() => { setMode('LOGIN'); setError(null); }}
-            className={`flex-1 py-2 text-xs font-bold rounded-lg transition cursor-pointer ${
-              mode === 'LOGIN' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            Sign In
-          </button>
-          <button
-            onClick={() => { setMode('ONBOARD'); setError(null); }}
-            className={`flex-1 py-2 text-xs font-bold rounded-lg transition cursor-pointer ${
-              mode === 'ONBOARD' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            Register School Tenant
-          </button>
-        </div>
+        {mode !== 'ACCEPT_INVITE' ? (
+          <div className="flex bg-slate-800/80 p-1 rounded-xl mb-4 border border-slate-700/60">
+            <button
+              onClick={() => { setMode('LOGIN'); setError(null); }}
+              className={`flex-1 py-2 text-xs font-bold rounded-lg transition cursor-pointer ${
+                mode === 'LOGIN' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              Sign In
+            </button>
+            <button
+              onClick={() => { setMode('ONBOARD'); setError(null); }}
+              className={`flex-1 py-2 text-xs font-bold rounded-lg transition cursor-pointer ${
+                mode === 'ONBOARD' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              Register School Tenant
+            </button>
+          </div>
+        ) : (
+          <div className="bg-indigo-950/60 border border-indigo-500/40 p-3 rounded-xl mb-4 text-xs text-indigo-200 flex items-center justify-between">
+            <div>
+              <span className="font-bold text-white block">School Administrator Activation</span>
+              <span>Invited to manage {inviteInfo?.schoolName || 'School'}</span>
+            </div>
+            <button
+              onClick={() => { setMode('LOGIN'); setError(null); }}
+              className="text-[11px] text-indigo-300 hover:text-white font-semibold cursor-pointer underline"
+            >
+              Standard Sign In
+            </button>
+          </div>
+        )}
 
         <div className="bg-slate-800/90 backdrop-blur-md py-8 px-6 shadow-2xl rounded-2xl border border-slate-700/80 sm:px-10">
           {error && (
@@ -163,7 +235,81 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
             </div>
           )}
 
-          {mode === 'LOGIN' ? (
+          {mode === 'ACCEPT_INVITE' ? (
+            <form onSubmit={handleAcceptInvite} className="space-y-4">
+              <div className="p-3 bg-slate-900/90 border border-slate-700 rounded-xl space-y-1">
+                <div className="text-[11px] text-slate-400">School Workspace</div>
+                <div className="text-xs font-bold text-white">{inviteInfo?.schoolName} ({inviteInfo?.schoolCode})</div>
+                <div className="text-[11px] text-indigo-300">Role: {inviteInfo?.role}</div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">Invited Email</label>
+                <input
+                  type="email"
+                  disabled
+                  value={inviteInfo?.email || ''}
+                  className="w-full px-3.5 py-2.5 bg-slate-900/50 border border-slate-700/60 rounded-xl text-xs text-slate-400 font-mono"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">Administrator Full Name *</label>
+                <input
+                  type="text"
+                  required
+                  value={inviteFullName}
+                  onChange={(e) => setInviteFullName(e.target.value)}
+                  className="w-full px-3.5 py-2.5 bg-slate-900/80 border border-slate-700 rounded-xl text-xs text-white focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">Contact Phone</label>
+                <input
+                  type="tel"
+                  placeholder="+91 98765 43210"
+                  value={invitePhone}
+                  onChange={(e) => setInvitePhone(e.target.value)}
+                  className="w-full px-3.5 py-2.5 bg-slate-900/80 border border-slate-700 rounded-xl text-xs text-white focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">Set Password * (min 8 chars)</label>
+                <input
+                  type="password"
+                  required
+                  minLength={8}
+                  placeholder="••••••••"
+                  value={invitePassword}
+                  onChange={(e) => setInvitePassword(e.target.value)}
+                  className="w-full px-3.5 py-2.5 bg-slate-900/80 border border-slate-700 rounded-xl text-xs text-white focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">Confirm Password *</label>
+                <input
+                  type="password"
+                  required
+                  minLength={8}
+                  placeholder="••••••••"
+                  value={inviteConfirmPassword}
+                  onChange={(e) => setInviteConfirmPassword(e.target.value)}
+                  className="w-full px-3.5 py-2.5 bg-slate-900/80 border border-slate-700 rounded-xl text-xs text-white focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={loading}
+                className="w-full py-2.5 px-4 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold transition shadow-md shadow-indigo-600/30 cursor-pointer disabled:opacity-60"
+              >
+                {loading ? 'Activating Account...' : 'Activate Account & Access Workspace'}
+              </button>
+            </form>
+          ) : mode === 'LOGIN' ? (
             <form onSubmit={handleLogin} className="space-y-4">
               <div>
                 <label className="block text-xs font-semibold text-slate-300 mb-1">Email Address</label>

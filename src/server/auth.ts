@@ -51,21 +51,74 @@ export function generateToken(user: AuthenticatedUser, schoolId?: string, role?:
   );
 }
 
-// In-memory rate limiting for login attempts per IP
+// In-memory rate limiting for security-sensitive auth endpoints
 const loginAttempts = new Map<string, { count: number; resetAt: number }>();
+const passwordResetAttempts = new Map<string, { count: number; resetAt: number }>();
+const signupAttempts = new Map<string, { count: number; resetAt: number }>();
 
+/**
+ * Strict Rate Limiter: Minimum 5 attempts per minute per IP on login
+ */
 export function checkLoginRateLimit(ip: string): boolean {
   const now = Date.now();
   const entry = loginAttempts.get(ip);
   if (!entry || now > entry.resetAt) {
-    loginAttempts.set(ip, { count: 1, resetAt: now + 60 * 1000 }); // 1 minute window
+    loginAttempts.set(ip, { count: 1, resetAt: now + 60 * 1000 }); // 1-minute window
     return true;
   }
-  if (entry.count >= 15) {
-    return false; // rate limit exceeded: max 15 attempts per minute
+  if (entry.count >= 5) {
+    return false; // Rate limit exceeded: maximum 5 attempts per minute
   }
   entry.count++;
   return true;
+}
+
+/**
+ * Strict Rate Limiter: Maximum 3 attempts per hour on password reset
+ */
+export function checkPasswordResetRateLimit(key: string): boolean {
+  const now = Date.now();
+  const entry = passwordResetAttempts.get(key);
+  if (!entry || now > entry.resetAt) {
+    passwordResetAttempts.set(key, { count: 1, resetAt: now + 60 * 60 * 1000 }); // 1-hour window
+    return true;
+  }
+  if (entry.count >= 3) {
+    return false; // Rate limit exceeded: maximum 3 attempts per hour
+  }
+  entry.count++;
+  return true;
+}
+
+/**
+ * Strict Rate Limiter: Maximum 5 signup/onboarding attempts per minute per IP
+ */
+export function checkSignupRateLimit(ip: string): boolean {
+  const now = Date.now();
+  const entry = signupAttempts.get(ip);
+  if (!entry || now > entry.resetAt) {
+    signupAttempts.set(ip, { count: 1, resetAt: now + 60 * 1000 });
+    return true;
+  }
+  if (entry.count >= 5) {
+    return false; // Rate limit exceeded
+  }
+  entry.count++;
+  return true;
+}
+
+/**
+ * Safe error responder: returns generic client message with correlation ID, never exposing database or system internals
+ */
+export function formatSafeServerError(res: Response, err: any, actionName: string): Response {
+  const correlationId = `err_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+  console.error(`[Server Error] [Action: ${actionName}] [Correlation ID: ${correlationId}]`, err?.message || err);
+  return res.status(500).json({
+    success: false,
+    error: 'INTERNAL_SERVER_ERROR',
+    message: 'An internal server error occurred. Please try again or contact system support with the correlation ID.',
+    correlationId,
+  });
 }
 
 // Middleware: Authenticate Bearer JWT with rotation overlap & active user validation

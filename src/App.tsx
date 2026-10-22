@@ -19,6 +19,7 @@ import { AttendanceView } from './client/views/AttendanceView.tsx';
 import { ReportsView } from './client/views/ReportsView.tsx';
 import { AuditLogsView } from './client/views/AuditLogsView.tsx';
 import { SettingsView } from './client/views/SettingsView.tsx';
+import { SchoolsManagementView } from './client/views/SchoolsManagementView.tsx';
 
 export default function App() {
   const [session, setSession] = useState<UserSession | null>(null);
@@ -137,10 +138,12 @@ export default function App() {
           currentView={currentView}
           onNavigate={(v) => setCurrentView(v)}
           userRole={session.activeSchool?.role}
+          systemRole={session.user.systemRole}
         />
 
         <main className="flex-1 p-4 sm:p-6 lg:p-8 min-w-0 overflow-y-auto">
           {currentView === 'DASHBOARD' && <DashboardView onNavigate={(v) => setCurrentView(v)} />}
+          {currentView === 'SCHOOLS' && <SchoolsManagementView />}
           {currentView === 'DRIVER_CONSOLE' && <DriverConsoleView />}
           {currentView === 'PARENT_PORTAL' && <ParentPortalView />}
           {currentView === 'TRIPS' && <TripsMonitorView onNavigateToConsole={() => setCurrentView('DRIVER_CONSOLE')} />}

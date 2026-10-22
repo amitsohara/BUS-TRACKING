@@ -1,6 +1,6 @@
 import { Router, Response } from 'express';
 import { db } from '../db.ts';
-import { authenticate, requireSchoolContext, AuthRequest, logAudit, hashPassword } from '../auth.ts';
+import { authenticate, requireSchoolContext, AuthRequest, logAudit, hashPassword, formatSafeServerError } from '../auth.ts';
 
 export const driverRoutes = Router();
 
@@ -126,7 +126,7 @@ driverRoutes.post(
       return res.status(201).json({ success: true, message: 'Driver registered successfully', driverId });
     } catch (err: any) {
       db.exec('ROLLBACK;');
-      return res.status(500).json({ success: false, error: 'SERVER_ERROR', message: err.message });
+      return formatSafeServerError(res, err, 'CREATE_DRIVER');
     }
   }
 );
