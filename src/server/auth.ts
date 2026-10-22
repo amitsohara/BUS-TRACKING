@@ -210,7 +210,7 @@ export function requireSchoolContext(allowedRoles?: string[]) {
       if (!targetSchoolId) {
         // Auto-select first active school as context if none specified
         const firstSchool = db
-          .prepare('SELECT id, name, code FROM schools WHERE status = "ACTIVE" ORDER BY created_at ASC LIMIT 1')
+          .prepare("SELECT id, name, code FROM schools WHERE status = 'ACTIVE' ORDER BY created_at ASC LIMIT 1")
           .get() as any;
         if (firstSchool) {
           targetSchoolId = firstSchool.id;

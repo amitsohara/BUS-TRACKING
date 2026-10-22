@@ -1220,7 +1220,7 @@ function requireSchoolContext(allowedRoles) {
     if (req.user.systemRole === "PLATFORM_ADMIN") {
       let targetSchoolId2 = requestedSchoolId;
       if (!targetSchoolId2) {
-        const firstSchool = db.prepare('SELECT id, name, code FROM schools WHERE status = "ACTIVE" ORDER BY created_at ASC LIMIT 1').get();
+        const firstSchool = db.prepare("SELECT id, name, code FROM schools WHERE status = 'ACTIVE' ORDER BY created_at ASC LIMIT 1").get();
         if (firstSchool) {
           targetSchoolId2 = firstSchool.id;
         }
@@ -5377,41 +5377,48 @@ auditRoutes.get(
   authenticate,
   requireSchoolContext(["SCHOOL_ADMIN", "PLATFORM_ADMIN"]),
   (req, res) => {
-    const schoolId = req.schoolContext.schoolId;
-    const action = req.query.action || "";
-    const entityType = req.query.entityType || "";
-    const page = Math.max(1, parseInt(req.query.page || "1", 10));
-    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit || "50", 10)));
-    const offset = (page - 1) * limit;
-    let query = `
-      SELECT a.*, u.full_name as user_name, u.email as user_email
-      FROM audit_logs a
-      LEFT JOIN users u ON a.user_id = u.id
-      WHERE a.school_id = ?
-    `;
-    const params = [schoolId];
-    if (action) {
-      query += ` AND a.action = ?`;
-      params.push(action);
-    }
-    if (entityType) {
-      query += ` AND a.entity_type = ?`;
-      params.push(entityType);
-    }
-    const countRow = db.prepare(`SELECT COUNT(*) as total FROM (${query})`).get(...params);
-    query += ` ORDER BY a.created_at DESC LIMIT ? OFFSET ?`;
-    params.push(limit, offset);
-    const logs = db.prepare(query).all(...params);
-    return res.json({
-      success: true,
-      logs,
-      pagination: {
-        page,
-        limit,
-        total: countRow.total,
-        totalPages: Math.ceil(countRow.total / limit)
+    try {
+      const schoolId = req.schoolContext?.schoolId;
+      if (!schoolId) {
+        return res.status(400).json({ success: false, error: "NO_SCHOOL_CONTEXT", message: "No school tenant selected." });
       }
-    });
+      const action = req.query.action || "";
+      const entityType = req.query.entityType || "";
+      const page = Math.max(1, parseInt(req.query.page || "1", 10));
+      const limit = Math.min(100, Math.max(1, parseInt(req.query.limit || "50", 10)));
+      const offset = (page - 1) * limit;
+      let query = `
+        SELECT a.*, u.full_name as user_name, u.email as user_email
+        FROM audit_logs a
+        LEFT JOIN users u ON a.user_id = u.id
+        WHERE a.school_id = ?
+      `;
+      const params = [schoolId];
+      if (action) {
+        query += ` AND a.action = ?`;
+        params.push(action);
+      }
+      if (entityType) {
+        query += ` AND a.entity_type = ?`;
+        params.push(entityType);
+      }
+      const countRow = db.prepare(`SELECT COUNT(*) as total FROM (${query})`).get(...params);
+      query += ` ORDER BY a.created_at DESC LIMIT ? OFFSET ?`;
+      params.push(limit, offset);
+      const logs = db.prepare(query).all(...params);
+      return res.json({
+        success: true,
+        logs,
+        pagination: {
+          page,
+          limit,
+          total: countRow ? countRow.total : 0,
+          totalPages: Math.ceil((countRow ? countRow.total : 0) / limit)
+        }
+      });
+    } catch (err) {
+      return formatSafeServerError(res, err, "LIST_AUDIT_LOGS");
+    }
   }
 );
 
