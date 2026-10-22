@@ -1,7 +1,7 @@
 import { Router, Response } from 'express';
 import crypto from 'crypto';
 import { db } from '../db.ts';
-import { authenticate, requireSchoolContext, AuthRequest, logAudit } from '../auth.ts';
+import { authenticate, requireSchoolContext, AuthRequest, logAudit, formatSafeServerError } from '../auth.ts';
 import { broadcastAttendanceEvent } from '../websocket.ts';
 import { dispatchNotification } from '../notificationService.ts';
 
@@ -50,7 +50,11 @@ attendanceRoutes.post(
   authenticate,
   requireSchoolContext(['DRIVER', 'ATTENDANT', 'TRANSPORT_MANAGER', 'SCHOOL_ADMIN', 'PLATFORM_ADMIN']),
   (req: AuthRequest, res: Response) => {
-    const schoolId = req.schoolContext!.schoolId;
+    try {
+      const schoolId = req.schoolContext?.schoolId;
+      if (!schoolId) {
+        return res.status(400).json({ success: false, error: 'NO_SCHOOL_CONTEXT', message: 'No school tenant context selected.' });
+      }
     const { tripId } = req.params;
     const { qrPayload, stopId, latitude, longitude, preferredEventType } = req.body;
 
@@ -245,6 +249,9 @@ attendanceRoutes.post(
       message: `${nextEventType === 'BOARDING' ? 'Boarding' : 'Drop-off'} confirmed for ${credential.student_name}`,
       event: eventPayload,
     });
+    } catch (err: any) {
+      return formatSafeServerError(res, err, 'SCAN_ATTENDANCE');
+    }
   }
 );
 
@@ -254,7 +261,11 @@ attendanceRoutes.post(
   authenticate,
   requireSchoolContext(['DRIVER', 'ATTENDANT', 'TRANSPORT_MANAGER', 'SCHOOL_ADMIN', 'PLATFORM_ADMIN']),
   (req: AuthRequest, res: Response) => {
-    const schoolId = req.schoolContext!.schoolId;
+    try {
+      const schoolId = req.schoolContext?.schoolId;
+      if (!schoolId) {
+        return res.status(400).json({ success: false, error: 'NO_SCHOOL_CONTEXT', message: 'No school tenant context selected.' });
+      }
     const { tripId } = req.params;
     const { studentId, eventType, stopId, manualReason, latitude, longitude } = req.body;
 
@@ -333,5 +344,8 @@ attendanceRoutes.post(
       message: `Manual ${eventType} logged for ${student.full_name}. Reason audited.`,
       event: eventPayload,
     });
+    } catch (err: any) {
+      return formatSafeServerError(res, err, 'MANUAL_ATTENDANCE');
+    }
   }
 );

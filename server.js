@@ -2776,199 +2776,228 @@ import crypto5 from "crypto";
 import QRCode from "qrcode";
 var studentRoutes = Router3();
 studentRoutes.get("/", authenticate, requireSchoolContext(), (req, res) => {
-  const schoolId = req.schoolContext.schoolId;
-  const search = (req.query.search || "").trim();
-  const grade = (req.query.grade || "").trim();
-  const page = Math.max(1, parseInt(req.query.page || "1", 10));
-  const limit = Math.min(100, Math.max(1, parseInt(req.query.limit || "50", 10)));
-  const offset = (page - 1) * limit;
-  let query = `
-    SELECT s.*, 
-      ta.morning_route_id, ta.morning_stop_id, ta.evening_route_id, ta.evening_stop_id,
-      r1.name as morning_route_name, r1.route_code as morning_route_code,
-      rs1.stop_name as morning_stop_name,
-      r2.name as evening_route_name, r2.route_code as evening_route_code,
-      rs2.stop_name as evening_stop_name,
-      qc.id as qr_id, qc.token_hint, qc.is_revoked as qr_revoked
-    FROM students s
-    LEFT JOIN transport_assignments ta ON s.id = ta.student_id AND ta.is_active = 1
-    LEFT JOIN routes r1 ON ta.morning_route_id = r1.id
-    LEFT JOIN route_stops rs1 ON ta.morning_stop_id = rs1.id
-    LEFT JOIN routes r2 ON ta.evening_route_id = r2.id
-    LEFT JOIN route_stops rs2 ON ta.evening_stop_id = rs2.id
-    LEFT JOIN qr_credentials qc ON s.id = qc.student_id AND qc.is_revoked = 0
-    WHERE s.school_id = ?
-  `;
-  const params = [schoolId];
-  if (search) {
-    query += ` AND (LOWER(s.full_name) LIKE ? OR LOWER(s.admission_number) LIKE ? OR s.emergency_phone LIKE ?)`;
-    const searchPattern = `%${search.toLowerCase()}%`;
-    params.push(searchPattern, searchPattern, searchPattern);
-  }
-  if (grade) {
-    query += ` AND s.grade = ?`;
-    params.push(grade);
-  }
-  const countRow = db.prepare(`SELECT COUNT(*) as total FROM (${query})`).get(...params);
-  query += ` ORDER BY s.grade ASC, s.section ASC, s.full_name ASC LIMIT ? OFFSET ?`;
-  params.push(limit, offset);
-  const students = db.prepare(query).all(...params);
-  return res.json({
-    success: true,
-    students,
-    pagination: {
-      page,
-      limit,
-      total: countRow.total,
-      totalPages: Math.ceil(countRow.total / limit)
+  try {
+    const schoolId = req.schoolContext?.schoolId;
+    if (!schoolId) {
+      return res.status(400).json({ success: false, error: "NO_SCHOOL_CONTEXT", message: "No active school tenant selected." });
     }
-  });
-});
-studentRoutes.get("/:id", authenticate, requireSchoolContext(), (req, res) => {
-  const schoolId = req.schoolContext.schoolId;
-  const student = db.prepare(`
+    const search = (req.query.search || "").trim();
+    const grade = (req.query.grade || "").trim();
+    const page = Math.max(1, parseInt(req.query.page || "1", 10));
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit || "50", 10)));
+    const offset = (page - 1) * limit;
+    let query = `
       SELECT s.*, 
         ta.morning_route_id, ta.morning_stop_id, ta.evening_route_id, ta.evening_stop_id,
         r1.name as morning_route_name, r1.route_code as morning_route_code,
-        rs1.stop_name as morning_stop_name, rs1.morning_scheduled_time,
-        r2.name as evening_route_name, r2.route_code as evening_stop_code,
-        rs2.stop_name as evening_stop_name, rs2.evening_scheduled_time
+        rs1.stop_name as morning_stop_name,
+        r2.name as evening_route_name, r2.route_code as evening_route_code,
+        rs2.stop_name as evening_stop_name,
+        qc.id as qr_id, qc.token_hint, qc.is_revoked as qr_revoked
       FROM students s
       LEFT JOIN transport_assignments ta ON s.id = ta.student_id AND ta.is_active = 1
       LEFT JOIN routes r1 ON ta.morning_route_id = r1.id
       LEFT JOIN route_stops rs1 ON ta.morning_stop_id = rs1.id
       LEFT JOIN routes r2 ON ta.evening_route_id = r2.id
       LEFT JOIN route_stops rs2 ON ta.evening_stop_id = rs2.id
-      WHERE s.id = ? AND s.school_id = ?
-    `).get(req.params.id, schoolId);
-  if (!student) {
-    return res.status(404).json({ success: false, error: "STUDENT_NOT_FOUND" });
+      LEFT JOIN qr_credentials qc ON s.id = qc.student_id AND qc.is_revoked = 0
+      WHERE s.school_id = ?
+    `;
+    const params = [schoolId];
+    if (search) {
+      query += ` AND (LOWER(s.full_name) LIKE ? OR LOWER(s.admission_number) LIKE ? OR s.emergency_phone LIKE ?)`;
+      const searchPattern = `%${search.toLowerCase()}%`;
+      params.push(searchPattern, searchPattern, searchPattern);
+    }
+    if (grade) {
+      query += ` AND s.grade = ?`;
+      params.push(grade);
+    }
+    const countRow = db.prepare(`SELECT COUNT(*) as total FROM (${query})`).get(...params);
+    query += ` ORDER BY s.grade ASC, s.section ASC, s.full_name ASC LIMIT ? OFFSET ?`;
+    params.push(limit, offset);
+    const students = db.prepare(query).all(...params);
+    return res.json({
+      success: true,
+      students,
+      pagination: {
+        page,
+        limit,
+        total: countRow ? countRow.total : 0,
+        totalPages: Math.ceil((countRow ? countRow.total : 0) / limit)
+      }
+    });
+  } catch (err) {
+    return formatSafeServerError(res, err, "LIST_STUDENTS");
   }
-  const guardians = db.prepare(`
-      SELECT g.*, sg.is_primary, sg.can_pickup, sg.relationship_type
-      FROM student_guardians sg
-      JOIN guardians g ON sg.guardian_id = g.id
-      WHERE sg.student_id = ?
-    `).all(student.id);
-  const qrCredential = db.prepare("SELECT id, token_hint, issued_at, expires_at, is_revoked FROM qr_credentials WHERE student_id = ? AND is_revoked = 0").get(student.id);
-  const recentAttendance = db.prepare(`
-      SELECT ae.*, r.name as route_name, rs.stop_name, u.full_name as scanned_by_name
-      FROM attendance_events ae
-      JOIN trips t ON ae.trip_id = t.id
-      JOIN routes r ON t.route_id = r.id
-      LEFT JOIN route_stops rs ON ae.stop_id = rs.id
-      LEFT JOIN users u ON ae.scanned_by_user_id = u.id
-      WHERE ae.student_id = ? AND ae.school_id = ?
-      ORDER BY ae.scanned_at DESC
-      LIMIT 10
-    `).all(student.id, schoolId);
-  return res.json({
-    success: true,
-    student,
-    guardians,
-    qrCredential,
-    recentAttendance
-  });
+});
+studentRoutes.get("/:id", authenticate, requireSchoolContext(), (req, res) => {
+  try {
+    const schoolId = req.schoolContext?.schoolId;
+    if (!schoolId) {
+      return res.status(400).json({ success: false, error: "NO_SCHOOL_CONTEXT", message: "No active school tenant selected." });
+    }
+    const student = db.prepare(`
+        SELECT s.*, 
+          ta.morning_route_id, ta.morning_stop_id, ta.evening_route_id, ta.evening_stop_id,
+          r1.name as morning_route_name, r1.route_code as morning_route_code,
+          rs1.stop_name as morning_stop_name, rs1.morning_scheduled_time,
+          r2.name as evening_route_name, r2.route_code as evening_stop_code,
+          rs2.stop_name as evening_stop_name, rs2.evening_scheduled_time
+        FROM students s
+        LEFT JOIN transport_assignments ta ON s.id = ta.student_id AND ta.is_active = 1
+        LEFT JOIN routes r1 ON ta.morning_route_id = r1.id
+        LEFT JOIN route_stops rs1 ON ta.morning_stop_id = rs1.id
+        LEFT JOIN routes r2 ON ta.evening_route_id = r2.id
+        LEFT JOIN route_stops rs2 ON ta.evening_stop_id = rs2.id
+        WHERE s.id = ? AND s.school_id = ?
+      `).get(req.params.id, schoolId);
+    if (!student) {
+      return res.status(404).json({ success: false, error: "STUDENT_NOT_FOUND" });
+    }
+    const guardians = db.prepare(`
+        SELECT g.*, sg.is_primary, sg.can_pickup, sg.relationship_type
+        FROM student_guardians sg
+        JOIN guardians g ON sg.guardian_id = g.id
+        WHERE sg.student_id = ?
+      `).all(student.id);
+    const qrCredential = db.prepare("SELECT id, token_hint, issued_at, expires_at, is_revoked FROM qr_credentials WHERE student_id = ? AND is_revoked = 0").get(student.id);
+    const recentAttendance = db.prepare(`
+        SELECT ae.*, r.name as route_name, rs.stop_name, u.full_name as scanned_by_name
+        FROM attendance_events ae
+        JOIN trips t ON ae.trip_id = t.id
+        JOIN routes r ON t.route_id = r.id
+        LEFT JOIN route_stops rs ON ae.stop_id = rs.id
+        LEFT JOIN users u ON ae.scanned_by_user_id = u.id
+        WHERE ae.student_id = ? AND ae.school_id = ?
+        ORDER BY ae.scanned_at DESC
+        LIMIT 10
+      `).all(student.id, schoolId);
+    return res.json({
+      success: true,
+      student,
+      guardians,
+      qrCredential,
+      recentAttendance
+    });
+  } catch (err) {
+    return formatSafeServerError(res, err, "GET_STUDENT_DETAIL");
+  }
 });
 studentRoutes.post(
   "/",
   authenticate,
   requireSchoolContext(["SCHOOL_ADMIN", "TRANSPORT_MANAGER", "PLATFORM_ADMIN"]),
   async (req, res) => {
-    const schoolId = req.schoolContext?.schoolId;
-    if (!schoolId) {
-      return res.status(400).json({
-        success: false,
-        error: "NO_SCHOOL_CONTEXT",
-        message: "No school specified or selected. Please select a school first."
-      });
-    }
-    const {
-      admissionNumber,
-      fullName,
-      grade,
-      section,
-      bloodGroup,
-      emergencyPhone,
-      homeAddress,
-      morningRouteId,
-      morningStopId,
-      eveningRouteId,
-      eveningStopId
-    } = req.body;
-    if (!admissionNumber || !fullName || !grade || !section || !emergencyPhone) {
-      return res.status(400).json({
-        success: false,
-        error: "VALIDATION_ERROR",
-        message: "Admission number, full name, grade, section, and emergency contact phone are required"
-      });
-    }
-    const existing = db.prepare("SELECT id FROM students WHERE school_id = ? AND LOWER(admission_number) = LOWER(?)").get(schoolId, admissionNumber.trim());
-    if (existing) {
-      return res.status(409).json({
-        success: false,
-        error: "ADMISSION_EXISTS",
-        message: `Student with admission number "${admissionNumber}" already exists in this school.`
-      });
-    }
-    const studentId = `stu_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-    db.exec("BEGIN TRANSACTION;");
     try {
-      db.prepare(`
-        INSERT INTO students (id, school_id, admission_number, full_name, grade, section, blood_group, emergency_phone, home_address, status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE')
-      `).run(
-        studentId,
-        schoolId,
-        admissionNumber.trim().toUpperCase(),
-        fullName.trim(),
-        grade.trim(),
-        section.trim().toUpperCase(),
-        bloodGroup || "O+",
-        emergencyPhone.trim(),
-        homeAddress || null
-      );
-      if (morningRouteId || eveningRouteId) {
-        db.prepare(`
-          INSERT INTO transport_assignments (id, school_id, student_id, morning_route_id, morning_stop_id, evening_route_id, evening_stop_id, academic_year, is_active)
-          VALUES (?, ?, ?, ?, ?, ?, ?, '2026-2027', 1)
-        `).run(
-          `ta_${studentId}`,
-          schoolId,
-          studentId,
-          morningRouteId || null,
-          morningStopId || null,
-          eveningRouteId || null,
-          eveningStopId || null
-        );
+      const schoolId = req.schoolContext?.schoolId;
+      if (!schoolId) {
+        return res.status(400).json({
+          success: false,
+          error: "NO_SCHOOL_CONTEXT",
+          message: "No school specified or selected. Please select a school first."
+        });
       }
-      const rawToken = `SVQR_${crypto5.randomBytes(24).toString("hex")}`;
-      const tokenHash = crypto5.createHash("sha256").update(rawToken).digest("hex");
-      const tokenHint = `SV-QR-${rawToken.substring(5, 9).toUpperCase()}`;
-      db.prepare(`
-        INSERT INTO qr_credentials (id, school_id, student_id, token_hash, token_hint, expires_at, is_revoked)
-        VALUES (?, ?, ?, ?, ?, date('now', '+1 year'), 0)
-      `).run(`qr_${studentId}`, schoolId, studentId, tokenHash, tokenHint);
-      db.exec("COMMIT;");
-      logAudit({
-        schoolId,
-        userId: req.user?.id,
-        action: "CREATE_STUDENT",
-        entityType: "STUDENT",
-        entityId: studentId,
-        newValues: { admissionNumber, fullName, grade, section }
-      });
-      return res.status(201).json({
-        success: true,
-        message: "Student registered successfully with transport and QR badge.",
-        studentId
-      });
-    } catch (err) {
+      const {
+        admissionNumber,
+        fullName,
+        grade,
+        section,
+        bloodGroup,
+        emergencyPhone,
+        homeAddress,
+        morningRouteId,
+        morningStopId,
+        eveningRouteId,
+        eveningStopId
+      } = req.body;
+      if (!admissionNumber || !fullName || !grade || !section || !emergencyPhone) {
+        return res.status(400).json({
+          success: false,
+          error: "VALIDATION_ERROR",
+          message: "Admission number, full name, grade, section, and emergency contact phone are required"
+        });
+      }
+      const cleanAdm = String(admissionNumber).trim();
+      const existing = db.prepare("SELECT id FROM students WHERE school_id = ? AND LOWER(admission_number) = LOWER(?)").get(schoolId, cleanAdm);
+      if (existing) {
+        return res.status(409).json({
+          success: false,
+          error: "ADMISSION_EXISTS",
+          message: `Student with admission number "${cleanAdm}" already exists in this school.`
+        });
+      }
+      const studentId = `stu_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+      db.exec("BEGIN TRANSACTION;");
       try {
-        db.exec("ROLLBACK;");
-      } catch (_) {
+        db.prepare(`
+          INSERT INTO students (id, school_id, admission_number, full_name, grade, section, blood_group, emergency_phone, home_address, status)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE')
+        `).run(
+          studentId,
+          schoolId,
+          cleanAdm.toUpperCase(),
+          String(fullName).trim(),
+          String(grade).trim(),
+          String(section).trim().toUpperCase(),
+          bloodGroup ? String(bloodGroup).trim() : "O+",
+          String(emergencyPhone).trim(),
+          homeAddress ? String(homeAddress).trim() : null
+        );
+        if (morningRouteId || eveningRouteId) {
+          let effMorningStop = morningStopId || null;
+          let effEveningStop = eveningStopId || null;
+          if (morningRouteId && !effMorningStop) {
+            const firstStop = db.prepare("SELECT id FROM route_stops WHERE route_id = ? ORDER BY sequence_order ASC LIMIT 1").get(morningRouteId);
+            if (firstStop) effMorningStop = firstStop.id;
+          }
+          if (eveningRouteId && !effEveningStop) {
+            const firstStop = db.prepare("SELECT id FROM route_stops WHERE route_id = ? ORDER BY sequence_order ASC LIMIT 1").get(eveningRouteId);
+            if (firstStop) effEveningStop = firstStop.id;
+          }
+          db.prepare(`
+            INSERT INTO transport_assignments (id, school_id, student_id, morning_route_id, morning_stop_id, evening_route_id, evening_stop_id, academic_year, is_active)
+            VALUES (?, ?, ?, ?, ?, ?, ?, '2026-2027', 1)
+          `).run(
+            `ta_${studentId}`,
+            schoolId,
+            studentId,
+            morningRouteId || null,
+            effMorningStop,
+            eveningRouteId || null,
+            effEveningStop
+          );
+        }
+        const rawToken = `SVQR_${crypto5.randomBytes(24).toString("hex")}`;
+        const tokenHash = crypto5.createHash("sha256").update(rawToken).digest("hex");
+        const tokenHint = `SV-QR-${rawToken.substring(5, 9).toUpperCase()}`;
+        db.prepare(`
+          INSERT INTO qr_credentials (id, school_id, student_id, token_hash, token_hint, expires_at, is_revoked)
+          VALUES (?, ?, ?, ?, ?, date('now', '+1 year'), 0)
+        `).run(`qr_${studentId}`, schoolId, studentId, tokenHash, tokenHint);
+        db.exec("COMMIT;");
+        logAudit({
+          schoolId,
+          userId: req.user?.id,
+          action: "CREATE_STUDENT",
+          entityType: "STUDENT",
+          entityId: studentId,
+          newValues: { admissionNumber: cleanAdm, fullName, grade, section }
+        });
+        return res.status(201).json({
+          success: true,
+          message: "Student registered successfully with transport and QR badge.",
+          studentId
+        });
+      } catch (err) {
+        try {
+          db.exec("ROLLBACK;");
+        } catch (_) {
+        }
+        return formatSafeServerError(res, err, "CREATE_STUDENT");
       }
-      return formatSafeServerError(res, err, "CREATE_STUDENT");
+    } catch (outerErr) {
+      return formatSafeServerError(res, outerErr, "CREATE_STUDENT_OUTER");
     }
   }
 );
@@ -2977,39 +3006,17 @@ studentRoutes.put(
   authenticate,
   requireSchoolContext(["SCHOOL_ADMIN", "TRANSPORT_MANAGER", "PLATFORM_ADMIN"]),
   (req, res) => {
-    const schoolId = req.schoolContext.schoolId;
-    const studentId = req.params.id;
-    const existing = db.prepare("SELECT * FROM students WHERE id = ? AND school_id = ?").get(studentId, schoolId);
-    if (!existing) {
-      return res.status(404).json({ success: false, error: "STUDENT_NOT_FOUND" });
-    }
-    const {
-      fullName,
-      grade,
-      section,
-      bloodGroup,
-      emergencyPhone,
-      homeAddress,
-      status,
-      morningRouteId,
-      morningStopId,
-      eveningRouteId,
-      eveningStopId
-    } = req.body;
-    db.exec("BEGIN TRANSACTION;");
     try {
-      db.prepare(`
-        UPDATE students SET
-          full_name = COALESCE(?, full_name),
-          grade = COALESCE(?, grade),
-          section = COALESCE(?, section),
-          blood_group = COALESCE(?, blood_group),
-          emergency_phone = COALESCE(?, emergency_phone),
-          home_address = COALESCE(?, home_address),
-          status = COALESCE(?, status),
-          updated_at = datetime('now')
-        WHERE id = ? AND school_id = ?
-      `).run(
+      const schoolId = req.schoolContext?.schoolId;
+      if (!schoolId) {
+        return res.status(400).json({ success: false, error: "NO_SCHOOL_CONTEXT", message: "No school tenant selected." });
+      }
+      const studentId = req.params.id;
+      const existing = db.prepare("SELECT * FROM students WHERE id = ? AND school_id = ?").get(studentId, schoolId);
+      if (!existing) {
+        return res.status(404).json({ success: false, error: "STUDENT_NOT_FOUND" });
+      }
+      const {
         fullName,
         grade,
         section,
@@ -3017,131 +3024,177 @@ studentRoutes.put(
         emergencyPhone,
         homeAddress,
         status,
-        studentId,
-        schoolId
-      );
-      if (morningRouteId !== void 0 || eveningRouteId !== void 0) {
+        morningRouteId,
+        morningStopId,
+        eveningRouteId,
+        eveningStopId
+      } = req.body;
+      db.exec("BEGIN TRANSACTION;");
+      try {
         db.prepare(`
-          INSERT INTO transport_assignments (id, school_id, student_id, morning_route_id, morning_stop_id, evening_route_id, evening_stop_id, academic_year, is_active)
-          VALUES (?, ?, ?, ?, ?, ?, ?, '2026-2027', 1)
-          ON CONFLICT(student_id, academic_year) DO UPDATE SET
-            morning_route_id = excluded.morning_route_id,
-            morning_stop_id = excluded.morning_stop_id,
-            evening_route_id = excluded.evening_route_id,
-            evening_stop_id = excluded.evening_stop_id,
+          UPDATE students SET
+            full_name = COALESCE(?, full_name),
+            grade = COALESCE(?, grade),
+            section = COALESCE(?, section),
+            blood_group = COALESCE(?, blood_group),
+            emergency_phone = COALESCE(?, emergency_phone),
+            home_address = COALESCE(?, home_address),
+            status = COALESCE(?, status),
             updated_at = datetime('now')
+          WHERE id = ? AND school_id = ?
         `).run(
-          `ta_${studentId}`,
-          schoolId,
+          fullName ? String(fullName).trim() : null,
+          grade ? String(grade).trim() : null,
+          section ? String(section).trim().toUpperCase() : null,
+          bloodGroup ? String(bloodGroup).trim() : null,
+          emergencyPhone ? String(emergencyPhone).trim() : null,
+          homeAddress ? String(homeAddress).trim() : null,
+          status ? String(status).trim() : null,
           studentId,
-          morningRouteId || null,
-          morningStopId || null,
-          eveningRouteId || null,
-          eveningStopId || null
+          schoolId
         );
+        if (morningRouteId !== void 0 || eveningRouteId !== void 0) {
+          db.prepare(`
+            INSERT INTO transport_assignments (id, school_id, student_id, morning_route_id, morning_stop_id, evening_route_id, evening_stop_id, academic_year, is_active)
+            VALUES (?, ?, ?, ?, ?, ?, ?, '2026-2027', 1)
+            ON CONFLICT(student_id, academic_year) DO UPDATE SET
+              morning_route_id = excluded.morning_route_id,
+              morning_stop_id = excluded.morning_stop_id,
+              evening_route_id = excluded.evening_route_id,
+              evening_stop_id = excluded.evening_stop_id,
+              updated_at = datetime('now')
+          `).run(
+            `ta_${studentId}`,
+            schoolId,
+            studentId,
+            morningRouteId || null,
+            morningStopId || null,
+            eveningRouteId || null,
+            eveningStopId || null
+          );
+        }
+        db.exec("COMMIT;");
+        logAudit({
+          schoolId,
+          userId: req.user?.id,
+          action: "UPDATE_STUDENT",
+          entityType: "STUDENT",
+          entityId: studentId,
+          oldValues: existing,
+          newValues: req.body
+        });
+        return res.json({ success: true, message: "Student updated successfully" });
+      } catch (err) {
+        try {
+          db.exec("ROLLBACK;");
+        } catch (_) {
+        }
+        return formatSafeServerError(res, err, "UPDATE_STUDENT");
       }
-      db.exec("COMMIT;");
-      logAudit({
-        schoolId,
-        userId: req.user?.id,
-        action: "UPDATE_STUDENT",
-        entityType: "STUDENT",
-        entityId: studentId,
-        oldValues: existing,
-        newValues: req.body
-      });
-      return res.json({ success: true, message: "Student updated successfully" });
-    } catch (err) {
-      db.exec("ROLLBACK;");
-      return formatSafeServerError(res, err, "UPDATE_STUDENT");
+    } catch (outerErr) {
+      return formatSafeServerError(res, outerErr, "UPDATE_STUDENT_OUTER");
     }
   }
 );
 studentRoutes.get("/:id/qr-badge", authenticate, requireSchoolContext(), async (req, res) => {
-  const schoolId = req.schoolContext.schoolId;
-  const studentId = req.params.id;
-  if (req.schoolContext?.role === "PARENT") {
-    const isLinked = db.prepare(`
-        SELECT 1 FROM student_guardians sg
-        JOIN guardians g ON sg.guardian_id = g.id
-        WHERE sg.student_id = ? AND g.user_id = ?
-      `).get(studentId, req.user.id);
-    if (!isLinked) {
-      return res.status(403).json({
-        success: false,
-        error: "ACCESS_DENIED",
-        message: "DPDP Privacy Protection: You are only authorized to view QR badges for your own registered children."
-      });
+  try {
+    const schoolId = req.schoolContext?.schoolId;
+    if (!schoolId) {
+      return res.status(400).json({ success: false, error: "NO_SCHOOL_CONTEXT", message: "No active school tenant selected." });
     }
-  }
-  const student = db.prepare("SELECT id, full_name, admission_number, grade, section, emergency_phone FROM students WHERE id = ? AND school_id = ?").get(studentId, schoolId);
-  if (!student) {
-    return res.status(404).json({ success: false, error: "STUDENT_NOT_FOUND" });
-  }
-  let credential = db.prepare("SELECT id, token_hash, token_hint, expires_at, is_revoked FROM qr_credentials WHERE student_id = ? AND is_revoked = 0").get(student.id);
-  let rawToken = "";
-  if (!credential) {
-    rawToken = `SVQR_${crypto5.randomBytes(24).toString("hex")}`;
-    const tokenHash = crypto5.createHash("sha256").update(rawToken).digest("hex");
-    const tokenHint = `SV-QR-${rawToken.substring(5, 9).toUpperCase()}`;
-    credential = {
-      id: `qr_${student.id}`,
-      token_hash: tokenHash,
-      token_hint: tokenHint,
-      expires_at: "2027-03-31",
-      is_revoked: 0
-    };
-    db.prepare(`
-      INSERT INTO qr_credentials (id, school_id, student_id, token_hash, token_hint, expires_at, is_revoked)
-      VALUES (?, ?, ?, ?, ?, ?, 0)
-    `).run(credential.id, schoolId, student.id, tokenHash, tokenHint, credential.expires_at);
-  } else {
-    rawToken = `SURAKSHA_VAHAN:${credential.id}:${credential.token_hash}`;
-  }
-  const qrPayload = rawToken || `SURAKSHA_VAHAN:${credential.id}:${credential.token_hash}`;
-  const qrDataUrl = await QRCode.toDataURL(qrPayload, {
-    width: 280,
-    margin: 2,
-    color: {
-      dark: "#1e293b",
-      light: "#ffffff"
+    const studentId = req.params.id;
+    if (req.schoolContext?.role === "PARENT") {
+      const isLinked = db.prepare(`
+          SELECT 1 FROM student_guardians sg
+          JOIN guardians g ON sg.guardian_id = g.id
+          WHERE sg.student_id = ? AND g.user_id = ?
+        `).get(studentId, req.user.id);
+      if (!isLinked) {
+        return res.status(403).json({
+          success: false,
+          error: "ACCESS_DENIED",
+          message: "DPDP Privacy Protection: You are only authorized to view QR badges for your own registered children."
+        });
+      }
     }
-  });
-  return res.json({
-    success: true,
-    student,
-    qrDataUrl,
-    qrPayload,
-    credential: {
-      id: credential.id,
-      tokenHint: credential.token_hint,
-      expiresAt: credential.expires_at
+    const student = db.prepare("SELECT id, full_name, admission_number, grade, section, emergency_phone FROM students WHERE id = ? AND school_id = ?").get(studentId, schoolId);
+    if (!student) {
+      return res.status(404).json({ success: false, error: "STUDENT_NOT_FOUND" });
     }
-  });
+    let credential = db.prepare("SELECT id, token_hash, token_hint, expires_at, is_revoked FROM qr_credentials WHERE student_id = ? AND is_revoked = 0").get(student.id);
+    let rawToken = "";
+    if (!credential) {
+      rawToken = `SVQR_${crypto5.randomBytes(24).toString("hex")}`;
+      const tokenHash = crypto5.createHash("sha256").update(rawToken).digest("hex");
+      const tokenHint = `SV-QR-${rawToken.substring(5, 9).toUpperCase()}`;
+      credential = {
+        id: `qr_${student.id}`,
+        token_hash: tokenHash,
+        token_hint: tokenHint,
+        expires_at: "2027-03-31",
+        is_revoked: 0
+      };
+      db.prepare(`
+        INSERT INTO qr_credentials (id, school_id, student_id, token_hash, token_hint, expires_at, is_revoked)
+        VALUES (?, ?, ?, ?, ?, ?, 0)
+      `).run(credential.id, schoolId, student.id, tokenHash, tokenHint, credential.expires_at);
+    } else {
+      rawToken = `SURAKSHA_VAHAN:${credential.id}:${credential.token_hash}`;
+    }
+    const qrPayload = rawToken || `SURAKSHA_VAHAN:${credential.id}:${credential.token_hash}`;
+    const qrDataUrl = await QRCode.toDataURL(qrPayload, {
+      width: 280,
+      margin: 2,
+      color: {
+        dark: "#1e293b",
+        light: "#ffffff"
+      }
+    });
+    return res.json({
+      success: true,
+      student,
+      qrDataUrl,
+      qrPayload,
+      credential: {
+        id: credential.id,
+        tokenHint: credential.token_hint,
+        expiresAt: credential.expires_at
+      }
+    });
+  } catch (err) {
+    return formatSafeServerError(res, err, "GET_STUDENT_QR");
+  }
 });
 studentRoutes.post(
   "/:id/revoke-qr",
   authenticate,
   requireSchoolContext(["SCHOOL_ADMIN", "TRANSPORT_MANAGER", "PLATFORM_ADMIN"]),
   (req, res) => {
-    const schoolId = req.schoolContext.schoolId;
-    const { reason } = req.body;
-    db.prepare(`
-      UPDATE qr_credentials SET
-        is_revoked = 1,
-        revoked_reason = ?,
-        revoked_at = datetime('now')
-      WHERE student_id = ? AND school_id = ? AND is_revoked = 0
-    `).run(reason || "Reported lost/damaged badge", req.params.id, schoolId);
-    logAudit({
-      schoolId,
-      userId: req.user?.id,
-      action: "REVOKE_QR_CREDENTIAL",
-      entityType: "QR_CREDENTIAL",
-      entityId: req.params.id,
-      newValues: { reason }
-    });
-    return res.json({ success: true, message: "QR credential revoked. Please issue a new badge." });
+    try {
+      const schoolId = req.schoolContext?.schoolId;
+      if (!schoolId) {
+        return res.status(400).json({ success: false, error: "NO_SCHOOL_CONTEXT", message: "No active school tenant selected." });
+      }
+      const { reason } = req.body;
+      db.prepare(`
+        UPDATE qr_credentials SET
+          is_revoked = 1,
+          revoked_reason = ?,
+          revoked_at = datetime('now')
+        WHERE student_id = ? AND school_id = ? AND is_revoked = 0
+      `).run(reason || "Reported lost/damaged badge", req.params.id, schoolId);
+      logAudit({
+        schoolId,
+        userId: req.user?.id,
+        action: "REVOKE_QR_CREDENTIAL",
+        entityType: "QR_CREDENTIAL",
+        entityId: req.params.id,
+        newValues: { reason }
+      });
+      return res.json({ success: true, message: "QR credential revoked. Please issue a new badge." });
+    } catch (err) {
+      return formatSafeServerError(res, err, "REVOKE_STUDENT_QR");
+    }
   }
 );
 
@@ -3149,84 +3202,101 @@ studentRoutes.post(
 import { Router as Router4 } from "express";
 var vehicleRoutes = Router4();
 vehicleRoutes.get("/", authenticate, requireSchoolContext(), (req, res) => {
-  const schoolId = req.schoolContext.schoolId;
-  const vehicles = db.prepare(`
-      SELECT v.*,
-        (SELECT COUNT(*) FROM routes r WHERE r.default_vehicle_id = v.id AND r.is_active = 1) as assigned_routes_count,
-        (SELECT t.id FROM trips t WHERE t.vehicle_id = v.id AND t.status = 'IN_PROGRESS' LIMIT 1) as active_trip_id,
-        (SELECT bl.recorded_at FROM bus_locations bl WHERE bl.vehicle_id = v.id ORDER BY bl.recorded_at DESC LIMIT 1) as last_gps_at
-      FROM vehicles v
-      WHERE v.school_id = ?
-      ORDER BY v.bus_number ASC
-    `).all(schoolId);
-  return res.json({ success: true, vehicles });
+  try {
+    const schoolId = req.schoolContext?.schoolId;
+    if (!schoolId) {
+      return res.status(400).json({
+        success: false,
+        error: "NO_SCHOOL_CONTEXT",
+        message: "No active school tenant selected."
+      });
+    }
+    const vehicles = db.prepare(`
+        SELECT v.*,
+          (SELECT COUNT(*) FROM routes r WHERE r.default_vehicle_id = v.id AND r.is_active = 1) as assigned_routes_count,
+          (SELECT t.id FROM trips t WHERE t.vehicle_id = v.id AND t.status = 'IN_PROGRESS' LIMIT 1) as active_trip_id,
+          (SELECT bl.recorded_at FROM bus_locations bl WHERE bl.vehicle_id = v.id ORDER BY bl.recorded_at DESC LIMIT 1) as last_gps_at
+        FROM vehicles v
+        WHERE v.school_id = ?
+        ORDER BY v.bus_number ASC
+      `).all(schoolId);
+    return res.json({ success: true, vehicles });
+  } catch (err) {
+    return formatSafeServerError(res, err, "LIST_VEHICLES");
+  }
 });
 vehicleRoutes.post(
   "/",
   authenticate,
   requireSchoolContext(["SCHOOL_ADMIN", "TRANSPORT_MANAGER", "PLATFORM_ADMIN"]),
   (req, res) => {
-    const schoolId = req.schoolContext?.schoolId;
-    if (!schoolId) {
-      return res.status(400).json({
-        success: false,
-        error: "NO_SCHOOL_CONTEXT",
-        message: "No school specified or selected. Please select a school first."
+    try {
+      const schoolId = req.schoolContext?.schoolId;
+      if (!schoolId) {
+        return res.status(400).json({
+          success: false,
+          error: "NO_SCHOOL_CONTEXT",
+          message: "No school specified or selected. Please select a school first."
+        });
+      }
+      const {
+        registrationNumber,
+        busNumber,
+        capacity,
+        model,
+        make,
+        fuelType,
+        fitnessExpiry,
+        insuranceExpiry,
+        gpsDeviceId
+      } = req.body;
+      if (!registrationNumber || !busNumber || capacity === void 0 || capacity === null || capacity === "") {
+        return res.status(400).json({
+          success: false,
+          error: "VALIDATION_ERROR",
+          message: "Registration number, internal bus number, and seating capacity are required"
+        });
+      }
+      const parsedCapacity = parseInt(String(capacity), 10);
+      const validCapacity = Number.isNaN(parsedCapacity) || parsedCapacity <= 0 ? 40 : parsedCapacity;
+      const regClean = registrationNumber.trim().toUpperCase();
+      const existing = db.prepare("SELECT id FROM vehicles WHERE school_id = ? AND UPPER(registration_number) = ?").get(schoolId, regClean);
+      if (existing) {
+        return res.status(409).json({
+          success: false,
+          error: "DUPLICATE_REGISTRATION",
+          message: `Vehicle with registration "${regClean}" is already registered in this school.`
+        });
+      }
+      const id = `veh_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+      db.prepare(`
+        INSERT INTO vehicles (id, school_id, registration_number, bus_number, capacity, model, make, fuel_type, fitness_expiry, insurance_expiry, gps_device_id, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE')
+      `).run(
+        id,
+        schoolId,
+        regClean,
+        busNumber.trim(),
+        validCapacity,
+        model ? String(model).trim() : "Standard School Bus",
+        make ? String(make).trim() : "Tata Motors",
+        fuelType ? String(fuelType).trim() : "CNG",
+        fitnessExpiry ? String(fitnessExpiry).trim() : null,
+        insuranceExpiry ? String(insuranceExpiry).trim() : null,
+        gpsDeviceId ? String(gpsDeviceId).trim() : null
+      );
+      logAudit({
+        schoolId,
+        userId: req.user?.id,
+        action: "CREATE_VEHICLE",
+        entityType: "VEHICLE",
+        entityId: id,
+        newValues: { registrationNumber: regClean, busNumber, capacity: validCapacity }
       });
+      return res.status(201).json({ success: true, message: "Vehicle added successfully", vehicleId: id });
+    } catch (err) {
+      return formatSafeServerError(res, err, "CREATE_VEHICLE");
     }
-    const {
-      registrationNumber,
-      busNumber,
-      capacity,
-      model,
-      make,
-      fuelType,
-      fitnessExpiry,
-      insuranceExpiry,
-      gpsDeviceId
-    } = req.body;
-    if (!registrationNumber || !busNumber || !capacity) {
-      return res.status(400).json({
-        success: false,
-        error: "VALIDATION_ERROR",
-        message: "Registration number, internal bus number, and seating capacity are required"
-      });
-    }
-    const regClean = registrationNumber.trim().toUpperCase();
-    const existing = db.prepare("SELECT id FROM vehicles WHERE school_id = ? AND UPPER(registration_number) = ?").get(schoolId, regClean);
-    if (existing) {
-      return res.status(409).json({
-        success: false,
-        error: "DUPLICATE_REGISTRATION",
-        message: `Vehicle with registration "${regClean}" is already registered in this school.`
-      });
-    }
-    const id = `veh_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-    db.prepare(`
-      INSERT INTO vehicles (id, school_id, registration_number, bus_number, capacity, model, make, fuel_type, fitness_expiry, insurance_expiry, gps_device_id, status)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE')
-    `).run(
-      id,
-      schoolId,
-      regClean,
-      busNumber.trim(),
-      parseInt(capacity, 10),
-      model || "Standard School Bus",
-      make || "Tata Motors",
-      fuelType || "CNG",
-      fitnessExpiry || null,
-      insuranceExpiry || null,
-      gpsDeviceId || null
-    );
-    logAudit({
-      schoolId,
-      userId: req.user?.id,
-      action: "CREATE_VEHICLE",
-      entityType: "VEHICLE",
-      entityId: id,
-      newValues: { registrationNumber: regClean, busNumber, capacity }
-    });
-    return res.status(201).json({ success: true, message: "Vehicle added successfully", vehicleId: id });
   }
 );
 vehicleRoutes.put(
@@ -3234,58 +3304,67 @@ vehicleRoutes.put(
   authenticate,
   requireSchoolContext(["SCHOOL_ADMIN", "TRANSPORT_MANAGER", "PLATFORM_ADMIN"]),
   (req, res) => {
-    const schoolId = req.schoolContext.schoolId;
-    const vehicleId = req.params.id;
-    const existing = db.prepare("SELECT * FROM vehicles WHERE id = ? AND school_id = ?").get(vehicleId, schoolId);
-    if (!existing) {
-      return res.status(404).json({ success: false, error: "VEHICLE_NOT_FOUND" });
+    try {
+      const schoolId = req.schoolContext?.schoolId;
+      if (!schoolId) {
+        return res.status(400).json({ success: false, error: "NO_SCHOOL_CONTEXT", message: "No school tenant selected." });
+      }
+      const vehicleId = req.params.id;
+      const existing = db.prepare("SELECT * FROM vehicles WHERE id = ? AND school_id = ?").get(vehicleId, schoolId);
+      if (!existing) {
+        return res.status(404).json({ success: false, error: "VEHICLE_NOT_FOUND" });
+      }
+      const {
+        busNumber,
+        capacity,
+        model,
+        make,
+        fuelType,
+        fitnessExpiry,
+        insuranceExpiry,
+        gpsDeviceId,
+        status
+      } = req.body;
+      const parsedCap = capacity !== void 0 && capacity !== null && capacity !== "" ? parseInt(String(capacity), 10) : null;
+      const validCap = parsedCap !== null && !Number.isNaN(parsedCap) ? parsedCap : null;
+      db.prepare(`
+        UPDATE vehicles SET
+          bus_number = COALESCE(?, bus_number),
+          capacity = COALESCE(?, capacity),
+          model = COALESCE(?, model),
+          make = COALESCE(?, make),
+          fuel_type = COALESCE(?, fuel_type),
+          fitness_expiry = COALESCE(?, fitness_expiry),
+          insurance_expiry = COALESCE(?, insurance_expiry),
+          gps_device_id = COALESCE(?, gps_device_id),
+          status = COALESCE(?, status),
+          updated_at = datetime('now')
+        WHERE id = ? AND school_id = ?
+      `).run(
+        busNumber || null,
+        validCap,
+        model || null,
+        make || null,
+        fuelType || null,
+        fitnessExpiry || null,
+        insuranceExpiry || null,
+        gpsDeviceId || null,
+        status || null,
+        vehicleId,
+        schoolId
+      );
+      logAudit({
+        schoolId,
+        userId: req.user?.id,
+        action: "UPDATE_VEHICLE",
+        entityType: "VEHICLE",
+        entityId: vehicleId,
+        newValues: req.body
+      });
+      return res.json({ success: true, message: "Vehicle updated successfully" });
+    } catch (err) {
+      return formatSafeServerError(res, err, "UPDATE_VEHICLE");
     }
-    const {
-      busNumber,
-      capacity,
-      model,
-      make,
-      fuelType,
-      fitnessExpiry,
-      insuranceExpiry,
-      gpsDeviceId,
-      status
-    } = req.body;
-    db.prepare(`
-      UPDATE vehicles SET
-        bus_number = COALESCE(?, bus_number),
-        capacity = COALESCE(?, capacity),
-        model = COALESCE(?, model),
-        make = COALESCE(?, make),
-        fuel_type = COALESCE(?, fuel_type),
-        fitness_expiry = COALESCE(?, fitness_expiry),
-        insurance_expiry = COALESCE(?, insurance_expiry),
-        gps_device_id = COALESCE(?, gps_device_id),
-        status = COALESCE(?, status),
-        updated_at = datetime('now')
-      WHERE id = ? AND school_id = ?
-    `).run(
-      busNumber,
-      capacity ? parseInt(capacity, 10) : null,
-      model,
-      make,
-      fuelType,
-      fitnessExpiry,
-      insuranceExpiry,
-      gpsDeviceId,
-      status,
-      vehicleId,
-      schoolId
-    );
-    logAudit({
-      schoolId,
-      userId: req.user?.id,
-      action: "UPDATE_VEHICLE",
-      entityType: "VEHICLE",
-      entityId: vehicleId,
-      newValues: req.body
-    });
-    return res.json({ success: true, message: "Vehicle updated successfully" });
   }
 );
 
@@ -3293,117 +3372,134 @@ vehicleRoutes.put(
 import { Router as Router5 } from "express";
 var driverRoutes = Router5();
 driverRoutes.get("/", authenticate, requireSchoolContext(), (req, res) => {
-  const schoolId = req.schoolContext.schoolId;
-  const drivers = db.prepare(`
-      SELECT d.*, u.email as user_email,
-        (SELECT COUNT(*) FROM trips t WHERE t.driver_id = d.id AND t.status = 'IN_PROGRESS') as active_trips_count,
-        (SELECT COUNT(*) FROM trips t WHERE t.driver_id = d.id AND t.status = 'COMPLETED') as total_completed_trips
-      FROM drivers d
-      LEFT JOIN users u ON d.user_id = u.id
-      WHERE d.school_id = ?
-      ORDER BY d.full_name ASC
-    `).all(schoolId);
-  return res.json({ success: true, drivers });
+  try {
+    const schoolId = req.schoolContext?.schoolId;
+    if (!schoolId) {
+      return res.status(400).json({
+        success: false,
+        error: "NO_SCHOOL_CONTEXT",
+        message: "No active school tenant selected."
+      });
+    }
+    const drivers = db.prepare(`
+        SELECT d.*, u.email as user_email,
+          (SELECT COUNT(*) FROM trips t WHERE t.driver_id = d.id AND t.status = 'IN_PROGRESS') as active_trips_count,
+          (SELECT COUNT(*) FROM trips t WHERE t.driver_id = d.id AND t.status = 'COMPLETED') as total_completed_trips
+        FROM drivers d
+        LEFT JOIN users u ON d.user_id = u.id
+        WHERE d.school_id = ?
+        ORDER BY d.full_name ASC
+      `).all(schoolId);
+    return res.json({ success: true, drivers });
+  } catch (err) {
+    return formatSafeServerError(res, err, "LIST_DRIVERS");
+  }
 });
 driverRoutes.post(
   "/",
   authenticate,
   requireSchoolContext(["SCHOOL_ADMIN", "TRANSPORT_MANAGER", "PLATFORM_ADMIN"]),
   async (req, res) => {
-    const schoolId = req.schoolContext?.schoolId;
-    if (!schoolId) {
-      return res.status(400).json({
-        success: false,
-        error: "NO_SCHOOL_CONTEXT",
-        message: "No school specified or selected. Please select a school first."
-      });
-    }
-    const {
-      fullName,
-      phone,
-      licenseNumber,
-      licenseExpiry,
-      badgeNumber,
-      emergencyContact,
-      bloodGroup,
-      yearsExperience,
-      email,
-      loginPassword
-    } = req.body;
-    if (!fullName || !phone || !licenseNumber || !licenseExpiry) {
-      return res.status(400).json({
-        success: false,
-        error: "VALIDATION_ERROR",
-        message: "Full name, phone, driving license number, and license expiry date are required"
-      });
-    }
-    const cleanLic = licenseNumber.trim().toUpperCase();
-    const existing = db.prepare("SELECT id FROM drivers WHERE school_id = ? AND UPPER(license_number) = ?").get(schoolId, cleanLic);
-    if (existing) {
-      return res.status(409).json({
-        success: false,
-        error: "DUPLICATE_LICENSE",
-        message: `Driver with license "${cleanLic}" is already registered in this school.`
-      });
-    }
-    const driverId = `drv_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-    let userId = null;
-    db.exec("BEGIN TRANSACTION;");
     try {
-      if (email && loginPassword) {
-        const cleanEmail = email.trim().toLowerCase();
-        const existingUser = db.prepare("SELECT id FROM users WHERE LOWER(email) = ?").get(cleanEmail);
-        if (existingUser) {
-          userId = existingUser.id;
-        } else {
-          userId = `usr_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-          const pwdHash = await hashPassword(loginPassword);
+      const schoolId = req.schoolContext?.schoolId;
+      if (!schoolId) {
+        return res.status(400).json({
+          success: false,
+          error: "NO_SCHOOL_CONTEXT",
+          message: "No school specified or selected. Please select a school first."
+        });
+      }
+      const {
+        fullName,
+        phone,
+        licenseNumber,
+        licenseExpiry,
+        badgeNumber,
+        emergencyContact,
+        bloodGroup,
+        yearsExperience,
+        email,
+        loginPassword
+      } = req.body;
+      if (!fullName || !phone || !licenseNumber || !licenseExpiry) {
+        return res.status(400).json({
+          success: false,
+          error: "VALIDATION_ERROR",
+          message: "Full name, phone, driving license number, and license expiry date are required"
+        });
+      }
+      const cleanLic = licenseNumber.trim().toUpperCase();
+      const existing = db.prepare("SELECT id FROM drivers WHERE school_id = ? AND UPPER(license_number) = ?").get(schoolId, cleanLic);
+      if (existing) {
+        return res.status(409).json({
+          success: false,
+          error: "DUPLICATE_LICENSE",
+          message: `Driver with license "${cleanLic}" is already registered in this school.`
+        });
+      }
+      const parsedExp = yearsExperience !== void 0 && yearsExperience !== null && yearsExperience !== "" ? parseInt(String(yearsExperience), 10) : 0;
+      const validExp = Number.isNaN(parsedExp) ? 0 : Math.max(0, parsedExp);
+      const driverId = `drv_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+      let userId = null;
+      db.exec("BEGIN TRANSACTION;");
+      try {
+        if (email && String(email).trim() && loginPassword && String(loginPassword).trim()) {
+          const cleanEmail = String(email).trim().toLowerCase();
+          const existingUser = db.prepare("SELECT id FROM users WHERE LOWER(email) = ?").get(cleanEmail);
+          if (existingUser) {
+            userId = existingUser.id;
+          } else {
+            userId = `usr_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+            const pwdHash = await hashPassword(String(loginPassword));
+            db.prepare(`
+              INSERT INTO users (id, email, password_hash, full_name, phone, system_role, is_active)
+              VALUES (?, ?, ?, ?, ?, 'USER', 1)
+            `).run(userId, cleanEmail, pwdHash, String(fullName).trim(), String(phone).trim());
+          }
           db.prepare(`
-            INSERT INTO users (id, email, password_hash, full_name, phone, system_role, is_active)
-            VALUES (?, ?, ?, ?, ?, 'USER', 1)
-          `).run(userId, cleanEmail, pwdHash, fullName.trim(), phone.trim());
+            INSERT INTO school_memberships (id, user_id, school_id, role, status)
+            VALUES (?, ?, ?, 'DRIVER', 'ACTIVE')
+            ON CONFLICT(user_id, school_id) DO UPDATE SET role = 'DRIVER', status = 'ACTIVE'
+          `).run(`mem_${userId}_${schoolId}`, userId, schoolId);
         }
         db.prepare(`
-          INSERT INTO school_memberships (id, user_id, school_id, role, status)
-          VALUES (?, ?, ?, 'DRIVER', 'ACTIVE')
-          ON CONFLICT(user_id, school_id) DO UPDATE SET role = 'DRIVER', status = 'ACTIVE'
-        `).run(`mem_${userId}_${schoolId}`, userId, schoolId);
+          INSERT INTO drivers (
+            id, school_id, user_id, full_name, phone, license_number, license_expiry,
+            badge_number, emergency_contact, blood_group, years_experience, status
+          )
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE')
+        `).run(
+          driverId,
+          schoolId,
+          userId,
+          String(fullName).trim(),
+          String(phone).trim(),
+          cleanLic,
+          String(licenseExpiry).trim(),
+          badgeNumber ? String(badgeNumber).trim() : null,
+          emergencyContact ? String(emergencyContact).trim() : null,
+          bloodGroup ? String(bloodGroup).trim() : "B+",
+          validExp
+        );
+        db.exec("COMMIT;");
+        logAudit({
+          schoolId,
+          userId: req.user?.id,
+          action: "CREATE_DRIVER",
+          entityType: "DRIVER",
+          entityId: driverId,
+          newValues: { fullName, phone, licenseNumber: cleanLic }
+        });
+        return res.status(201).json({ success: true, message: "Driver registered successfully", driverId });
+      } catch (err) {
+        try {
+          db.exec("ROLLBACK;");
+        } catch (_) {
+        }
+        return formatSafeServerError(res, err, "CREATE_DRIVER");
       }
-      db.prepare(`
-        INSERT INTO drivers (
-          id, school_id, user_id, full_name, phone, license_number, license_expiry,
-          badge_number, emergency_contact, blood_group, years_experience, status
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE')
-      `).run(
-        driverId,
-        schoolId,
-        userId,
-        fullName.trim(),
-        phone.trim(),
-        cleanLic,
-        licenseExpiry,
-        badgeNumber || null,
-        emergencyContact || null,
-        bloodGroup || "B+",
-        yearsExperience ? parseInt(yearsExperience, 10) : 0
-      );
-      db.exec("COMMIT;");
-      logAudit({
-        schoolId,
-        userId: req.user?.id,
-        action: "CREATE_DRIVER",
-        entityType: "DRIVER",
-        entityId: driverId,
-        newValues: { fullName, phone, licenseNumber: cleanLic }
-      });
-      return res.status(201).json({ success: true, message: "Driver registered successfully", driverId });
-    } catch (err) {
-      try {
-        db.exec("ROLLBACK;");
-      } catch (_) {
-      }
-      return formatSafeServerError(res, err, "CREATE_DRIVER");
+    } catch (outerErr) {
+      return formatSafeServerError(res, outerErr, "CREATE_DRIVER_OUTER");
     }
   }
 );
@@ -3412,58 +3508,67 @@ driverRoutes.put(
   authenticate,
   requireSchoolContext(["SCHOOL_ADMIN", "TRANSPORT_MANAGER", "PLATFORM_ADMIN"]),
   (req, res) => {
-    const schoolId = req.schoolContext.schoolId;
-    const driverId = req.params.id;
-    const existing = db.prepare("SELECT * FROM drivers WHERE id = ? AND school_id = ?").get(driverId, schoolId);
-    if (!existing) {
-      return res.status(404).json({ success: false, error: "DRIVER_NOT_FOUND" });
+    try {
+      const schoolId = req.schoolContext?.schoolId;
+      if (!schoolId) {
+        return res.status(400).json({ success: false, error: "NO_SCHOOL_CONTEXT", message: "No school tenant selected." });
+      }
+      const driverId = req.params.id;
+      const existing = db.prepare("SELECT * FROM drivers WHERE id = ? AND school_id = ?").get(driverId, schoolId);
+      if (!existing) {
+        return res.status(404).json({ success: false, error: "DRIVER_NOT_FOUND" });
+      }
+      const {
+        fullName,
+        phone,
+        licenseNumber,
+        licenseExpiry,
+        badgeNumber,
+        emergencyContact,
+        bloodGroup,
+        yearsExperience,
+        status
+      } = req.body;
+      const parsedExp = yearsExperience !== void 0 && yearsExperience !== null && yearsExperience !== "" ? parseInt(String(yearsExperience), 10) : null;
+      const validExp = parsedExp !== null && !Number.isNaN(parsedExp) ? Math.max(0, parsedExp) : null;
+      db.prepare(`
+        UPDATE drivers SET
+          full_name = COALESCE(?, full_name),
+          phone = COALESCE(?, phone),
+          license_number = COALESCE(?, license_number),
+          license_expiry = COALESCE(?, license_expiry),
+          badge_number = COALESCE(?, badge_number),
+          emergency_contact = COALESCE(?, emergency_contact),
+          blood_group = COALESCE(?, blood_group),
+          years_experience = COALESCE(?, years_experience),
+          status = COALESCE(?, status),
+          updated_at = datetime('now')
+        WHERE id = ? AND school_id = ?
+      `).run(
+        fullName ? String(fullName).trim() : null,
+        phone ? String(phone).trim() : null,
+        licenseNumber ? String(licenseNumber).trim().toUpperCase() : null,
+        licenseExpiry ? String(licenseExpiry).trim() : null,
+        badgeNumber ? String(badgeNumber).trim() : null,
+        emergencyContact ? String(emergencyContact).trim() : null,
+        bloodGroup ? String(bloodGroup).trim() : null,
+        validExp,
+        status ? String(status).trim() : null,
+        driverId,
+        schoolId
+      );
+      logAudit({
+        schoolId,
+        userId: req.user?.id,
+        action: "UPDATE_DRIVER",
+        entityType: "DRIVER",
+        entityId: driverId,
+        newValues: req.body
+      });
+      return res.json({ success: true, message: "Driver updated successfully" });
+    } catch (err) {
+      return formatSafeServerError(res, err, "UPDATE_DRIVER");
     }
-    const {
-      fullName,
-      phone,
-      licenseNumber,
-      licenseExpiry,
-      badgeNumber,
-      emergencyContact,
-      bloodGroup,
-      yearsExperience,
-      status
-    } = req.body;
-    db.prepare(`
-      UPDATE drivers SET
-        full_name = COALESCE(?, full_name),
-        phone = COALESCE(?, phone),
-        license_number = COALESCE(?, license_number),
-        license_expiry = COALESCE(?, license_expiry),
-        badge_number = COALESCE(?, badge_number),
-        emergency_contact = COALESCE(?, emergency_contact),
-        blood_group = COALESCE(?, blood_group),
-        years_experience = COALESCE(?, years_experience),
-        status = COALESCE(?, status),
-        updated_at = datetime('now')
-      WHERE id = ? AND school_id = ?
-    `).run(
-      fullName,
-      phone,
-      licenseNumber,
-      licenseExpiry,
-      badgeNumber,
-      emergencyContact,
-      bloodGroup,
-      yearsExperience ? parseInt(yearsExperience, 10) : null,
-      status,
-      driverId,
-      schoolId
-    );
-    logAudit({
-      schoolId,
-      userId: req.user?.id,
-      action: "UPDATE_DRIVER",
-      entityType: "DRIVER",
-      entityId: driverId,
-      newValues: req.body
-    });
-    return res.json({ success: true, message: "Driver updated successfully" });
   }
 );
 
@@ -3471,147 +3576,165 @@ driverRoutes.put(
 import { Router as Router6 } from "express";
 var routeRoutes = Router6();
 routeRoutes.get("/", authenticate, requireSchoolContext(), (req, res) => {
-  const schoolId = req.schoolContext.schoolId;
-  const routes = db.prepare(`
-      SELECT r.*,
-        v.bus_number, v.registration_number, v.capacity as vehicle_capacity,
-        d.full_name as driver_name, d.phone as driver_phone,
-        (SELECT COUNT(*) FROM route_stops rs WHERE rs.route_id = r.id) as stops_count,
-        (SELECT COUNT(*) FROM transport_assignments ta WHERE (ta.morning_route_id = r.id OR ta.evening_route_id = r.id) AND ta.is_active = 1) as assigned_students_count
-      FROM routes r
-      LEFT JOIN vehicles v ON r.default_vehicle_id = v.id
-      LEFT JOIN drivers d ON r.default_driver_id = d.id
-      WHERE r.school_id = ?
-      ORDER BY r.route_code ASC
-    `).all(schoolId);
-  return res.json({ success: true, routes });
+  try {
+    const schoolId = req.schoolContext?.schoolId;
+    if (!schoolId) {
+      return res.status(400).json({ success: false, error: "NO_SCHOOL_CONTEXT", message: "No active school tenant selected." });
+    }
+    const routes = db.prepare(`
+        SELECT r.*,
+          v.bus_number, v.registration_number, v.capacity as vehicle_capacity,
+          d.full_name as driver_name, d.phone as driver_phone,
+          (SELECT COUNT(*) FROM route_stops rs WHERE rs.route_id = r.id) as stops_count,
+          (SELECT COUNT(*) FROM transport_assignments ta WHERE (ta.morning_route_id = r.id OR ta.evening_route_id = r.id) AND ta.is_active = 1) as assigned_students_count
+        FROM routes r
+        LEFT JOIN vehicles v ON r.default_vehicle_id = v.id
+        LEFT JOIN drivers d ON r.default_driver_id = d.id
+        WHERE r.school_id = ?
+        ORDER BY r.route_code ASC
+      `).all(schoolId);
+    return res.json({ success: true, routes });
+  } catch (err) {
+    return formatSafeServerError(res, err, "LIST_ROUTES");
+  }
 });
 routeRoutes.get("/:id", authenticate, requireSchoolContext(), (req, res) => {
-  const schoolId = req.schoolContext.schoolId;
-  const route = db.prepare(`
-      SELECT r.*,
-        v.bus_number, v.registration_number, v.capacity as vehicle_capacity,
-        d.full_name as driver_name, d.phone as driver_phone
-      FROM routes r
-      LEFT JOIN vehicles v ON r.default_vehicle_id = v.id
-      LEFT JOIN drivers d ON r.default_driver_id = d.id
-      WHERE r.id = ? AND r.school_id = ?
-    `).get(req.params.id, schoolId);
-  if (!route) {
-    return res.status(404).json({ success: false, error: "ROUTE_NOT_FOUND" });
+  try {
+    const schoolId = req.schoolContext?.schoolId;
+    if (!schoolId) {
+      return res.status(400).json({ success: false, error: "NO_SCHOOL_CONTEXT", message: "No active school tenant selected." });
+    }
+    const route = db.prepare(`
+        SELECT r.*,
+          v.bus_number, v.registration_number, v.capacity as vehicle_capacity,
+          d.full_name as driver_name, d.phone as driver_phone
+        FROM routes r
+        LEFT JOIN vehicles v ON r.default_vehicle_id = v.id
+        LEFT JOIN drivers d ON r.default_driver_id = d.id
+        WHERE r.id = ? AND r.school_id = ?
+      `).get(req.params.id, schoolId);
+    if (!route) {
+      return res.status(404).json({ success: false, error: "ROUTE_NOT_FOUND" });
+    }
+    const stops = db.prepare(`
+        SELECT rs.*,
+          (SELECT COUNT(*) FROM transport_assignments ta WHERE (ta.morning_stop_id = rs.id OR ta.evening_stop_id = rs.id) AND ta.is_active = 1) as students_at_stop
+        FROM route_stops rs
+        WHERE rs.route_id = ?
+        ORDER BY rs.sequence_order ASC
+      `).all(route.id);
+    const students = db.prepare(`
+        SELECT s.id, s.admission_number, s.full_name, s.grade, s.section, s.emergency_phone,
+          ta.morning_stop_id, ta.evening_stop_id,
+          rs1.stop_name as morning_stop_name, rs2.stop_name as evening_stop_name
+        FROM transport_assignments ta
+        JOIN students s ON ta.student_id = s.id
+        LEFT JOIN route_stops rs1 ON ta.morning_stop_id = rs1.id
+        LEFT JOIN route_stops rs2 ON ta.evening_stop_id = rs2.id
+        WHERE (ta.morning_route_id = ? OR ta.evening_route_id = ?) AND ta.is_active = 1 AND s.school_id = ?
+        ORDER BY s.grade ASC, s.full_name ASC
+      `).all(route.id, route.id, schoolId);
+    return res.json({ success: true, route, stops, students });
+  } catch (err) {
+    return formatSafeServerError(res, err, "GET_ROUTE_DETAIL");
   }
-  const stops = db.prepare(`
-      SELECT rs.*,
-        (SELECT COUNT(*) FROM transport_assignments ta WHERE (ta.morning_stop_id = rs.id OR ta.evening_stop_id = rs.id) AND ta.is_active = 1) as students_at_stop
-      FROM route_stops rs
-      WHERE rs.route_id = ?
-      ORDER BY rs.sequence_order ASC
-    `).all(route.id);
-  const students = db.prepare(`
-      SELECT s.id, s.admission_number, s.full_name, s.grade, s.section, s.emergency_phone,
-        ta.morning_stop_id, ta.evening_stop_id,
-        rs1.stop_name as morning_stop_name, rs2.stop_name as evening_stop_name
-      FROM transport_assignments ta
-      JOIN students s ON ta.student_id = s.id
-      LEFT JOIN route_stops rs1 ON ta.morning_stop_id = rs1.id
-      LEFT JOIN route_stops rs2 ON ta.evening_stop_id = rs2.id
-      WHERE (ta.morning_route_id = ? OR ta.evening_route_id = ?) AND ta.is_active = 1 AND s.school_id = ?
-      ORDER BY s.grade ASC, s.full_name ASC
-    `).all(route.id, route.id, schoolId);
-  return res.json({ success: true, route, stops, students });
 });
 routeRoutes.post(
   "/",
   authenticate,
   requireSchoolContext(["SCHOOL_ADMIN", "TRANSPORT_MANAGER", "PLATFORM_ADMIN"]),
   (req, res) => {
-    const schoolId = req.schoolContext?.schoolId;
-    if (!schoolId) {
-      return res.status(400).json({
-        success: false,
-        error: "NO_SCHOOL_CONTEXT",
-        message: "No school specified or selected. Please select a school first."
-      });
-    }
-    const {
-      routeCode,
-      name,
-      description,
-      morningStartTime,
-      eveningStartTime,
-      defaultVehicleId,
-      defaultDriverId,
-      stops
-    } = req.body;
-    if (!routeCode || !name) {
-      return res.status(400).json({
-        success: false,
-        error: "VALIDATION_ERROR",
-        message: "Route code and route name are required"
-      });
-    }
-    const cleanCode = routeCode.trim().toUpperCase();
-    const existing = db.prepare("SELECT id FROM routes WHERE school_id = ? AND UPPER(route_code) = ?").get(schoolId, cleanCode);
-    if (existing) {
-      return res.status(409).json({
-        success: false,
-        error: "DUPLICATE_ROUTE_CODE",
-        message: `Route with code "${cleanCode}" already exists.`
-      });
-    }
-    const routeId = `rt_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-    db.exec("BEGIN TRANSACTION;");
     try {
-      db.prepare(`
-        INSERT INTO routes (id, school_id, route_code, name, description, morning_start_time, evening_start_time, default_vehicle_id, default_driver_id, is_active)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
-      `).run(
-        routeId,
-        schoolId,
-        cleanCode,
-        name.trim(),
-        description || null,
-        morningStartTime || "07:00",
-        eveningStartTime || "14:30",
-        defaultVehicleId || null,
-        defaultDriverId || null
-      );
-      if (Array.isArray(stops) && stops.length > 0) {
-        stops.forEach((st, idx) => {
-          const stopId = `stp_${routeId}_${idx + 1}`;
-          db.prepare(`
-            INSERT INTO route_stops (id, route_id, stop_name, landmark, latitude, longitude, sequence_order, morning_scheduled_time, evening_scheduled_time, geofence_radius_meters)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-          `).run(
-            stopId,
-            routeId,
-            st.stopName || `Stop ${idx + 1}`,
-            st.landmark || null,
-            parseFloat(st.latitude) || 28.6139,
-            parseFloat(st.longitude) || 77.209,
-            idx + 1,
-            st.morningScheduledTime || null,
-            st.eveningScheduledTime || null,
-            st.geofenceRadiusMeters || 50
-          );
+      const schoolId = req.schoolContext?.schoolId;
+      if (!schoolId) {
+        return res.status(400).json({
+          success: false,
+          error: "NO_SCHOOL_CONTEXT",
+          message: "No school specified or selected. Please select a school first."
         });
       }
-      db.exec("COMMIT;");
-      logAudit({
-        schoolId,
-        userId: req.user?.id,
-        action: "CREATE_ROUTE",
-        entityType: "ROUTE",
-        entityId: routeId,
-        newValues: { routeCode: cleanCode, name, stopsCount: stops?.length || 0 }
-      });
-      return res.status(201).json({ success: true, message: "Route created successfully", routeId });
-    } catch (err) {
-      try {
-        db.exec("ROLLBACK;");
-      } catch (_) {
+      const {
+        routeCode,
+        name,
+        description,
+        morningStartTime,
+        eveningStartTime,
+        defaultVehicleId,
+        defaultDriverId,
+        stops
+      } = req.body;
+      if (!routeCode || !name) {
+        return res.status(400).json({
+          success: false,
+          error: "VALIDATION_ERROR",
+          message: "Route code and route name are required"
+        });
       }
-      return formatSafeServerError(res, err, "CREATE_ROUTE");
+      const cleanCode = String(routeCode).trim().toUpperCase();
+      const existing = db.prepare("SELECT id FROM routes WHERE school_id = ? AND UPPER(route_code) = ?").get(schoolId, cleanCode);
+      if (existing) {
+        return res.status(409).json({
+          success: false,
+          error: "DUPLICATE_ROUTE_CODE",
+          message: `Route with code "${cleanCode}" already exists.`
+        });
+      }
+      const routeId = `rt_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+      db.exec("BEGIN TRANSACTION;");
+      try {
+        db.prepare(`
+          INSERT INTO routes (id, school_id, route_code, name, description, morning_start_time, evening_start_time, default_vehicle_id, default_driver_id, is_active)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+        `).run(
+          routeId,
+          schoolId,
+          cleanCode,
+          String(name).trim(),
+          description ? String(description).trim() : null,
+          morningStartTime || "07:00",
+          eveningStartTime || "14:30",
+          defaultVehicleId || null,
+          defaultDriverId || null
+        );
+        if (Array.isArray(stops) && stops.length > 0) {
+          stops.forEach((st, idx) => {
+            const stopId = `stp_${routeId}_${idx + 1}`;
+            db.prepare(`
+              INSERT INTO route_stops (id, route_id, stop_name, landmark, latitude, longitude, sequence_order, morning_scheduled_time, evening_scheduled_time, geofence_radius_meters)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `).run(
+              stopId,
+              routeId,
+              st.stopName || `Stop ${idx + 1}`,
+              st.landmark || null,
+              parseFloat(st.latitude) || 28.6139,
+              parseFloat(st.longitude) || 77.209,
+              idx + 1,
+              st.morningScheduledTime || null,
+              st.eveningScheduledTime || null,
+              st.geofenceRadiusMeters || 50
+            );
+          });
+        }
+        db.exec("COMMIT;");
+        logAudit({
+          schoolId,
+          userId: req.user?.id,
+          action: "CREATE_ROUTE",
+          entityType: "ROUTE",
+          entityId: routeId,
+          newValues: { routeCode: cleanCode, name, stopsCount: stops?.length || 0 }
+        });
+        return res.status(201).json({ success: true, message: "Route created successfully", routeId });
+      } catch (err) {
+        try {
+          db.exec("ROLLBACK;");
+        } catch (_) {
+        }
+        return formatSafeServerError(res, err, "CREATE_ROUTE");
+      }
+    } catch (outerErr) {
+      return formatSafeServerError(res, outerErr, "CREATE_ROUTE_OUTER");
     }
   }
 );
@@ -3620,47 +3743,54 @@ routeRoutes.post(
   authenticate,
   requireSchoolContext(["SCHOOL_ADMIN", "TRANSPORT_MANAGER", "PLATFORM_ADMIN"]),
   (req, res) => {
-    const schoolId = req.schoolContext.schoolId;
-    const routeId = req.params.id;
-    const route = db.prepare("SELECT id FROM routes WHERE id = ? AND school_id = ?").get(routeId, schoolId);
-    if (!route) {
-      return res.status(404).json({ success: false, error: "ROUTE_NOT_FOUND" });
+    try {
+      const schoolId = req.schoolContext?.schoolId;
+      if (!schoolId) {
+        return res.status(400).json({ success: false, error: "NO_SCHOOL_CONTEXT", message: "No school tenant selected." });
+      }
+      const routeId = req.params.id;
+      const route = db.prepare("SELECT id FROM routes WHERE id = ? AND school_id = ?").get(routeId, schoolId);
+      if (!route) {
+        return res.status(404).json({ success: false, error: "ROUTE_NOT_FOUND" });
+      }
+      const {
+        stopName,
+        landmark,
+        latitude,
+        longitude,
+        morningScheduledTime,
+        eveningScheduledTime,
+        geofenceRadiusMeters
+      } = req.body;
+      if (!stopName || latitude === void 0 || longitude === void 0) {
+        return res.status(400).json({
+          success: false,
+          error: "VALIDATION_ERROR",
+          message: "Stop name, latitude, and longitude are required"
+        });
+      }
+      const maxSeq = db.prepare("SELECT MAX(sequence_order) as m FROM route_stops WHERE route_id = ?").get(routeId)?.m || 0;
+      const nextSeq = maxSeq + 1;
+      const stopId = `stp_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+      db.prepare(`
+        INSERT INTO route_stops (id, route_id, stop_name, landmark, latitude, longitude, sequence_order, morning_scheduled_time, evening_scheduled_time, geofence_radius_meters)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        stopId,
+        routeId,
+        String(stopName).trim(),
+        landmark ? String(landmark).trim() : null,
+        parseFloat(latitude) || 28.6139,
+        parseFloat(longitude) || 77.209,
+        nextSeq,
+        morningScheduledTime || null,
+        eveningScheduledTime || null,
+        geofenceRadiusMeters || 50
+      );
+      return res.status(201).json({ success: true, message: "Stop added to route", stopId, sequenceOrder: nextSeq });
+    } catch (err) {
+      return formatSafeServerError(res, err, "ADD_ROUTE_STOP");
     }
-    const {
-      stopName,
-      landmark,
-      latitude,
-      longitude,
-      morningScheduledTime,
-      eveningScheduledTime,
-      geofenceRadiusMeters
-    } = req.body;
-    if (!stopName || latitude === void 0 || longitude === void 0) {
-      return res.status(400).json({
-        success: false,
-        error: "VALIDATION_ERROR",
-        message: "Stop name, latitude, and longitude are required"
-      });
-    }
-    const maxSeq = db.prepare("SELECT MAX(sequence_order) as m FROM route_stops WHERE route_id = ?").get(routeId)?.m || 0;
-    const nextSeq = maxSeq + 1;
-    const stopId = `stp_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
-    db.prepare(`
-      INSERT INTO route_stops (id, route_id, stop_name, landmark, latitude, longitude, sequence_order, morning_scheduled_time, evening_scheduled_time, geofence_radius_meters)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      stopId,
-      routeId,
-      stopName.trim(),
-      landmark || null,
-      parseFloat(latitude),
-      parseFloat(longitude),
-      nextSeq,
-      morningScheduledTime || null,
-      eveningScheduledTime || null,
-      geofenceRadiusMeters || 50
-    );
-    return res.status(201).json({ success: true, message: "Stop added to route", stopId, sequenceOrder: nextSeq });
   }
 );
 
@@ -4338,105 +4468,112 @@ locationRoutes.post(
   authenticate,
   requireSchoolContext(["DRIVER", "TRANSPORT_MANAGER", "SCHOOL_ADMIN", "PLATFORM_ADMIN"]),
   (req, res) => {
-    const schoolId = req.schoolContext.schoolId;
-    const { tripId } = req.params;
-    const {
-      latitude,
-      longitude,
-      speedKmh,
-      heading,
-      accuracyMeters,
-      altitude,
-      recordedAt
-    } = req.body;
-    if (latitude === void 0 || longitude === void 0) {
-      return res.status(400).json({
-        success: false,
-        error: "INVALID_COORDINATES",
-        message: "Latitude and longitude are mandatory."
-      });
-    }
-    const lat = parseFloat(latitude);
-    const lng = parseFloat(longitude);
-    if (isNaN(lat) || lat < -90 || lat > 90 || isNaN(lng) || lng < -180 || lng > 180) {
-      return res.status(400).json({
-        success: false,
-        error: "COORDINATES_OUT_OF_BOUNDS",
-        message: "Latitude must be between -90 and 90; longitude must be between -180 and 180."
-      });
-    }
-    const trip = db.prepare("SELECT id, school_id, vehicle_id, driver_id, status FROM trips WHERE id = ? AND school_id = ?").get(tripId, schoolId);
-    if (!trip) {
-      return res.status(404).json({ success: false, error: "TRIP_NOT_FOUND" });
-    }
-    if (trip.status !== "IN_PROGRESS") {
-      return res.status(400).json({
-        success: false,
-        error: "TRIP_NOT_ACTIVE",
-        message: `Cannot ingest GPS points for trip in "${trip.status}" state. Only IN_PROGRESS trips accept telemetry.`
-      });
-    }
-    const recordedTimestamp = recordedAt || (/* @__PURE__ */ new Date()).toISOString();
-    const locId = `loc_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
-    const speed = speedKmh !== void 0 ? Math.max(0, parseFloat(speedKmh)) : 0;
-    const hdg = heading !== void 0 ? parseFloat(heading) : 0;
-    const acc = accuracyMeters !== void 0 ? parseFloat(accuracyMeters) : 5;
-    db.prepare(`
-      INSERT INTO bus_locations (
-        id, trip_id, vehicle_id, latitude, longitude, speed_kmh, heading,
-        accuracy_meters, altitude, recorded_at, ingested_at
-      )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
-    `).run(
-      locId,
-      tripId,
-      trip.vehicle_id,
-      lat,
-      lng,
-      speed,
-      hdg,
-      acc,
-      altitude ? parseFloat(altitude) : null,
-      recordedTimestamp
-    );
-    const pendingStops = db.prepare(`
-        SELECT ts.id, ts.route_stop_id, ts.status, rs.stop_name, rs.latitude, rs.longitude, rs.geofence_radius_meters
-        FROM trip_stops ts
-        JOIN route_stops rs ON ts.route_stop_id = rs.id
-        WHERE ts.trip_id = ? AND ts.status = 'PENDING'
-        ORDER BY ts.stop_order ASC
-        LIMIT 1
-      `).all(tripId);
-    if (pendingStops.length > 0) {
-      const nextStop = pendingStops[0];
-      const distance = calculateDistanceMeters(lat, lng, nextStop.latitude, nextStop.longitude);
-      const threshold = nextStop.geofence_radius_meters || 50;
-      if (distance <= threshold) {
-        db.prepare(`
-          UPDATE trip_stops SET
-            status = 'ARRIVED',
-            arrived_at = datetime('now')
-          WHERE id = ?
-        `).run(nextStop.id);
+    try {
+      const schoolId = req.schoolContext?.schoolId;
+      if (!schoolId) {
+        return res.status(400).json({ success: false, error: "NO_SCHOOL_CONTEXT", message: "No school tenant selected." });
       }
+      const { tripId } = req.params;
+      const {
+        latitude,
+        longitude,
+        speedKmh,
+        heading,
+        accuracyMeters,
+        altitude,
+        recordedAt
+      } = req.body;
+      if (latitude === void 0 || longitude === void 0) {
+        return res.status(400).json({
+          success: false,
+          error: "INVALID_COORDINATES",
+          message: "Latitude and longitude are mandatory."
+        });
+      }
+      const lat = parseFloat(latitude);
+      const lng = parseFloat(longitude);
+      if (isNaN(lat) || lat < -90 || lat > 90 || isNaN(lng) || lng < -180 || lng > 180) {
+        return res.status(400).json({
+          success: false,
+          error: "COORDINATES_OUT_OF_BOUNDS",
+          message: "Latitude must be between -90 and 90; longitude must be between -180 and 180."
+        });
+      }
+      const trip = db.prepare("SELECT id, school_id, vehicle_id, driver_id, status FROM trips WHERE id = ? AND school_id = ?").get(tripId, schoolId);
+      if (!trip) {
+        return res.status(404).json({ success: false, error: "TRIP_NOT_FOUND" });
+      }
+      if (trip.status !== "IN_PROGRESS") {
+        return res.status(400).json({
+          success: false,
+          error: "TRIP_NOT_ACTIVE",
+          message: `Cannot ingest GPS points for trip in "${trip.status}" state. Only IN_PROGRESS trips accept telemetry.`
+        });
+      }
+      const recordedTimestamp = recordedAt || (/* @__PURE__ */ new Date()).toISOString();
+      const locId = `loc_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+      const speed = speedKmh !== void 0 ? Math.max(0, parseFloat(speedKmh)) : 0;
+      const hdg = heading !== void 0 ? parseFloat(heading) : 0;
+      const acc = accuracyMeters !== void 0 ? parseFloat(accuracyMeters) : 5;
+      db.prepare(`
+        INSERT INTO bus_locations (
+          id, trip_id, vehicle_id, latitude, longitude, speed_kmh, heading,
+          accuracy_meters, altitude, recorded_at, ingested_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+      `).run(
+        locId,
+        tripId,
+        trip.vehicle_id,
+        lat,
+        lng,
+        speed,
+        hdg,
+        acc,
+        altitude ? parseFloat(altitude) : null,
+        recordedTimestamp
+      );
+      const pendingStops = db.prepare(`
+          SELECT ts.id, ts.route_stop_id, ts.status, rs.stop_name, rs.latitude, rs.longitude, rs.geofence_radius_meters
+          FROM trip_stops ts
+          JOIN route_stops rs ON ts.route_stop_id = rs.id
+          WHERE ts.trip_id = ? AND ts.status = 'PENDING'
+          ORDER BY ts.stop_order ASC
+          LIMIT 1
+        `).all(tripId);
+      if (pendingStops.length > 0) {
+        const nextStop = pendingStops[0];
+        const distance = calculateDistanceMeters(lat, lng, nextStop.latitude, nextStop.longitude);
+        const threshold = nextStop.geofence_radius_meters || 50;
+        if (distance <= threshold) {
+          db.prepare(`
+            UPDATE trip_stops SET
+              status = 'ARRIVED',
+              arrived_at = datetime('now')
+            WHERE id = ?
+          `).run(nextStop.id);
+        }
+      }
+      const liveTelemetry = {
+        id: locId,
+        tripId,
+        vehicleId: trip.vehicle_id,
+        latitude: lat,
+        longitude: lng,
+        speedKmh: speed,
+        heading: hdg,
+        accuracyMeters: acc,
+        recordedAt: recordedTimestamp
+      };
+      broadcastTripLocation(tripId, liveTelemetry);
+      return res.status(201).json({
+        success: true,
+        message: "Location ingested and broadcast successfully",
+        location: liveTelemetry
+      });
+    } catch (err) {
+      return formatSafeServerError(res, err, "INGEST_GPS_LOCATION");
     }
-    const liveTelemetry = {
-      id: locId,
-      tripId,
-      vehicleId: trip.vehicle_id,
-      latitude: lat,
-      longitude: lng,
-      speedKmh: speed,
-      heading: hdg,
-      accuracyMeters: acc,
-      recordedAt: recordedTimestamp
-    };
-    broadcastTripLocation(tripId, liveTelemetry);
-    return res.status(201).json({
-      success: true,
-      message: "Location ingested and broadcast successfully",
-      location: liveTelemetry
-    });
   }
 );
 locationRoutes.post(
@@ -4444,136 +4581,160 @@ locationRoutes.post(
   authenticate,
   requireSchoolContext(["DRIVER", "TRANSPORT_MANAGER", "SCHOOL_ADMIN", "PLATFORM_ADMIN"]),
   (req, res) => {
-    const schoolId = req.schoolContext.schoolId;
-    const { tripId } = req.params;
-    const { points } = req.body;
-    if (!Array.isArray(points) || points.length === 0) {
-      return res.status(400).json({
-        success: false,
-        error: "INVALID_PAYLOAD",
-        message: "points must be a non-empty array of coordinates."
-      });
-    }
-    const trip = db.prepare("SELECT id, school_id, vehicle_id, status FROM trips WHERE id = ? AND school_id = ?").get(tripId, schoolId);
-    if (!trip) {
-      return res.status(404).json({ success: false, error: "TRIP_NOT_FOUND" });
-    }
-    if (trip.status !== "IN_PROGRESS") {
-      return res.status(400).json({
-        success: false,
-        error: "TRIP_NOT_ACTIVE",
-        message: "Cannot ingest GPS points for non-active trips."
-      });
-    }
-    db.exec("BEGIN TRANSACTION;");
     try {
-      const stmt = db.prepare(`
-        INSERT INTO bus_locations (
-          id, trip_id, vehicle_id, latitude, longitude, speed_kmh, heading,
-          accuracy_meters, altitude, recorded_at, ingested_at
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
-      `);
-      let lastTelemetry = null;
-      let validCount = 0;
-      for (const p of points) {
-        const lat = parseFloat(p.latitude);
-        const lng = parseFloat(p.longitude);
-        if (isNaN(lat) || isNaN(lng) || lat < -90 || lat > 90 || lng < -180 || lng > 180) {
-          continue;
+      const schoolId = req.schoolContext?.schoolId;
+      if (!schoolId) {
+        return res.status(400).json({ success: false, error: "NO_SCHOOL_CONTEXT", message: "No school tenant selected." });
+      }
+      const { tripId } = req.params;
+      const { points } = req.body;
+      if (!Array.isArray(points) || points.length === 0) {
+        return res.status(400).json({
+          success: false,
+          error: "INVALID_PAYLOAD",
+          message: "points must be a non-empty array of coordinates."
+        });
+      }
+      const trip = db.prepare("SELECT id, school_id, vehicle_id, status FROM trips WHERE id = ? AND school_id = ?").get(tripId, schoolId);
+      if (!trip) {
+        return res.status(404).json({ success: false, error: "TRIP_NOT_FOUND" });
+      }
+      if (trip.status !== "IN_PROGRESS") {
+        return res.status(400).json({
+          success: false,
+          error: "TRIP_NOT_ACTIVE",
+          message: "Cannot ingest GPS points for non-active trips."
+        });
+      }
+      db.exec("BEGIN TRANSACTION;");
+      try {
+        const stmt = db.prepare(`
+          INSERT INTO bus_locations (
+            id, trip_id, vehicle_id, latitude, longitude, speed_kmh, heading,
+            accuracy_meters, altitude, recorded_at, ingested_at
+          )
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+        `);
+        let lastTelemetry = null;
+        let validCount = 0;
+        for (const p of points) {
+          const lat = parseFloat(p.latitude);
+          const lng = parseFloat(p.longitude);
+          if (isNaN(lat) || isNaN(lng) || lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+            continue;
+          }
+          const locId = `loc_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+          const recordedTimestamp = p.recordedAt || (/* @__PURE__ */ new Date()).toISOString();
+          const speed = p.speedKmh !== void 0 ? Math.max(0, parseFloat(p.speedKmh)) : 0;
+          const hdg = p.heading !== void 0 ? parseFloat(p.heading) : 0;
+          const acc = p.accuracyMeters !== void 0 ? parseFloat(p.accuracyMeters) : 5;
+          stmt.run(
+            locId,
+            tripId,
+            trip.vehicle_id,
+            lat,
+            lng,
+            speed,
+            hdg,
+            acc,
+            p.altitude ? parseFloat(p.altitude) : null,
+            recordedTimestamp
+          );
+          lastTelemetry = {
+            id: locId,
+            tripId,
+            vehicleId: trip.vehicle_id,
+            latitude: lat,
+            longitude: lng,
+            speedKmh: speed,
+            heading: hdg,
+            accuracyMeters: acc,
+            recordedAt: recordedTimestamp
+          };
+          validCount++;
         }
-        const locId = `loc_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
-        const recordedTimestamp = p.recordedAt || (/* @__PURE__ */ new Date()).toISOString();
-        const speed = p.speedKmh !== void 0 ? Math.max(0, parseFloat(p.speedKmh)) : 0;
-        const hdg = p.heading !== void 0 ? parseFloat(p.heading) : 0;
-        const acc = p.accuracyMeters !== void 0 ? parseFloat(p.accuracyMeters) : 5;
-        stmt.run(
-          locId,
-          tripId,
-          trip.vehicle_id,
-          lat,
-          lng,
-          speed,
-          hdg,
-          acc,
-          p.altitude ? parseFloat(p.altitude) : null,
-          recordedTimestamp
-        );
-        lastTelemetry = {
-          id: locId,
-          tripId,
-          vehicleId: trip.vehicle_id,
-          latitude: lat,
-          longitude: lng,
-          speedKmh: speed,
-          heading: hdg,
-          accuracyMeters: acc,
-          recordedAt: recordedTimestamp
-        };
-        validCount++;
+        db.exec("COMMIT;");
+        if (lastTelemetry) {
+          broadcastTripLocation(tripId, lastTelemetry);
+        }
+        return res.status(201).json({
+          success: true,
+          message: `Successfully ingested ${validCount} GPS points.`,
+          ingestedCount: validCount,
+          latestLocation: lastTelemetry
+        });
+      } catch (err) {
+        try {
+          db.exec("ROLLBACK;");
+        } catch (_) {
+        }
+        return formatSafeServerError(res, err, "BATCH_GPS_INGEST");
       }
-      db.exec("COMMIT;");
-      if (lastTelemetry) {
-        broadcastTripLocation(tripId, lastTelemetry);
-      }
-      return res.status(201).json({
-        success: true,
-        message: `Successfully ingested ${validCount} GPS points.`,
-        ingestedCount: validCount,
-        latestLocation: lastTelemetry
-      });
-    } catch (err) {
-      db.exec("ROLLBACK;");
-      return formatSafeServerError(res, err, "BATCH_GPS_INGEST");
+    } catch (outerErr) {
+      return formatSafeServerError(res, outerErr, "BATCH_GPS_INGEST_OUTER");
     }
   }
 );
 locationRoutes.get("/:tripId/locations/latest", authenticate, requireSchoolContext(), (req, res) => {
-  const schoolId = req.schoolContext.schoolId;
-  const { tripId } = req.params;
-  const trip = db.prepare("SELECT id, status, vehicle_id FROM trips WHERE id = ? AND school_id = ?").get(tripId, schoolId);
-  if (!trip) {
-    return res.status(404).json({ success: false, error: "TRIP_NOT_FOUND" });
-  }
-  const latest = db.prepare("SELECT * FROM bus_locations WHERE trip_id = ? ORDER BY recorded_at DESC LIMIT 1").get(tripId);
-  if (!latest) {
+  try {
+    const schoolId = req.schoolContext?.schoolId;
+    if (!schoolId) {
+      return res.status(400).json({ success: false, error: "NO_SCHOOL_CONTEXT", message: "No school tenant selected." });
+    }
+    const { tripId } = req.params;
+    const trip = db.prepare("SELECT id, status, vehicle_id FROM trips WHERE id = ? AND school_id = ?").get(tripId, schoolId);
+    if (!trip) {
+      return res.status(404).json({ success: false, error: "TRIP_NOT_FOUND" });
+    }
+    const latest = db.prepare("SELECT * FROM bus_locations WHERE trip_id = ? ORDER BY recorded_at DESC LIMIT 1").get(tripId);
+    if (!latest) {
+      return res.json({
+        success: true,
+        hasLocation: false,
+        message: "No GPS telemetry received for this trip yet.",
+        tripStatus: trip.status
+      });
+    }
+    const recordedMillis = new Date(latest.recorded_at).getTime();
+    const secondsAgo = Math.floor((Date.now() - recordedMillis) / 1e3);
+    const isStale = secondsAgo > 120;
     return res.json({
       success: true,
-      hasLocation: false,
-      message: "No GPS telemetry received for this trip yet.",
+      hasLocation: true,
+      location: latest,
+      freshness: {
+        secondsAgo,
+        isStale,
+        lastUpdated: latest.recorded_at
+      },
       tripStatus: trip.status
     });
+  } catch (err) {
+    return formatSafeServerError(res, err, "GET_LATEST_LOCATION");
   }
-  const recordedMillis = new Date(latest.recorded_at).getTime();
-  const secondsAgo = Math.floor((Date.now() - recordedMillis) / 1e3);
-  const isStale = secondsAgo > 120;
-  return res.json({
-    success: true,
-    hasLocation: true,
-    location: latest,
-    freshness: {
-      secondsAgo,
-      isStale,
-      lastUpdated: latest.recorded_at
-    },
-    tripStatus: trip.status
-  });
 });
 locationRoutes.get("/:tripId/locations/history", authenticate, requireSchoolContext(), (req, res) => {
-  const schoolId = req.schoolContext.schoolId;
-  const { tripId } = req.params;
-  const trip = db.prepare("SELECT id FROM trips WHERE id = ? AND school_id = ?").get(tripId, schoolId);
-  if (!trip) {
-    return res.status(404).json({ success: false, error: "TRIP_NOT_FOUND" });
+  try {
+    const schoolId = req.schoolContext?.schoolId;
+    if (!schoolId) {
+      return res.status(400).json({ success: false, error: "NO_SCHOOL_CONTEXT", message: "No school tenant selected." });
+    }
+    const { tripId } = req.params;
+    const trip = db.prepare("SELECT id FROM trips WHERE id = ? AND school_id = ?").get(tripId, schoolId);
+    if (!trip) {
+      return res.status(404).json({ success: false, error: "TRIP_NOT_FOUND" });
+    }
+    const trail = db.prepare(`
+        SELECT latitude, longitude, speed_kmh, heading, accuracy_meters, recorded_at
+        FROM bus_locations
+        WHERE trip_id = ?
+        ORDER BY recorded_at ASC
+        LIMIT 1000
+      `).all(tripId);
+    return res.json({ success: true, count: trail.length, coordinates: trail });
+  } catch (err) {
+    return formatSafeServerError(res, err, "GET_LOCATION_HISTORY");
   }
-  const trail = db.prepare(`
-      SELECT latitude, longitude, speed_kmh, heading, accuracy_meters, recorded_at
-      FROM bus_locations
-      WHERE trip_id = ?
-      ORDER BY recorded_at ASC
-      LIMIT 1000
-    `).all(tripId);
-  return res.json({ success: true, count: trail.length, coordinates: trail });
 });
 
 // src/server/routes/attendanceRoutes.ts
@@ -4613,159 +4774,166 @@ attendanceRoutes.post(
   authenticate,
   requireSchoolContext(["DRIVER", "ATTENDANT", "TRANSPORT_MANAGER", "SCHOOL_ADMIN", "PLATFORM_ADMIN"]),
   (req, res) => {
-    const schoolId = req.schoolContext.schoolId;
-    const { tripId } = req.params;
-    const { qrPayload, stopId, latitude, longitude, preferredEventType } = req.body;
-    if (!qrPayload) {
-      return res.status(400).json({
-        success: false,
-        error: "MISSING_QR_PAYLOAD",
-        message: "QR code payload string is required."
-      });
-    }
-    const trip = db.prepare("SELECT * FROM trips WHERE id = ? AND school_id = ?").get(tripId, schoolId);
-    if (!trip) {
-      return res.status(404).json({ success: false, error: "TRIP_NOT_FOUND" });
-    }
-    if (trip.status !== "IN_PROGRESS") {
-      return res.status(400).json({
-        success: false,
-        error: "TRIP_NOT_ACTIVE",
-        message: `Attendance can only be scanned during an IN_PROGRESS trip. (Current status: ${trip.status})`
-      });
-    }
-    let tokenHash = "";
-    let qrId = "";
-    if (qrPayload.startsWith("SURAKSHA_VAHAN:")) {
-      const parts = qrPayload.split(":");
-      qrId = parts[1];
-      tokenHash = parts[2];
-    } else {
-      tokenHash = crypto7.createHash("sha256").update(qrPayload.trim()).digest("hex");
-    }
-    let credential = db.prepare(`
+    try {
+      const schoolId = req.schoolContext?.schoolId;
+      if (!schoolId) {
+        return res.status(400).json({ success: false, error: "NO_SCHOOL_CONTEXT", message: "No school tenant context selected." });
+      }
+      const { tripId } = req.params;
+      const { qrPayload, stopId, latitude, longitude, preferredEventType } = req.body;
+      if (!qrPayload) {
+        return res.status(400).json({
+          success: false,
+          error: "MISSING_QR_PAYLOAD",
+          message: "QR code payload string is required."
+        });
+      }
+      const trip = db.prepare("SELECT * FROM trips WHERE id = ? AND school_id = ?").get(tripId, schoolId);
+      if (!trip) {
+        return res.status(404).json({ success: false, error: "TRIP_NOT_FOUND" });
+      }
+      if (trip.status !== "IN_PROGRESS") {
+        return res.status(400).json({
+          success: false,
+          error: "TRIP_NOT_ACTIVE",
+          message: `Attendance can only be scanned during an IN_PROGRESS trip. (Current status: ${trip.status})`
+        });
+      }
+      let tokenHash = "";
+      let qrId = "";
+      if (qrPayload.startsWith("SURAKSHA_VAHAN:")) {
+        const parts = qrPayload.split(":");
+        qrId = parts[1];
+        tokenHash = parts[2];
+      } else {
+        tokenHash = crypto7.createHash("sha256").update(qrPayload.trim()).digest("hex");
+      }
+      let credential = db.prepare(`
         SELECT qc.*, s.full_name as student_name, s.admission_number, s.grade, s.section, s.emergency_phone
         FROM qr_credentials qc
         JOIN students s ON qc.student_id = s.id
         WHERE (qc.token_hash = ? OR qc.id = ?) AND qc.school_id = ?
       `).get(tokenHash, qrId, schoolId);
-    if (!credential) {
-      logAudit({
-        schoolId,
-        userId: req.user?.id,
-        action: "QR_SCAN_REJECTED",
-        entityType: "ATTENDANCE",
-        newValues: { reason: "UNRECOGNIZED_QR_TOKEN", rawInput: qrPayload.substring(0, 20) }
-      });
-      return res.status(404).json({
-        success: false,
-        error: "INVALID_QR_BADGE",
-        message: "Unrecognized or unassigned QR badge. Student not found."
-      });
-    }
-    if (credential.is_revoked) {
-      return res.status(403).json({
-        success: false,
-        error: "REVOKED_QR_BADGE",
-        message: `This student QR badge was revoked (${credential.revoked_reason || "Lost card"}). Scan rejected.`
-      });
-    }
-    const studentId = credential.student_id;
-    const routeCol = trip.trip_type === "EVENING_DROP" ? "evening_route_id" : "morning_route_id";
-    const assignment = db.prepare(`SELECT * FROM transport_assignments WHERE student_id = ? AND ${routeCol} = ? AND is_active = 1`).get(studentId, trip.route_id);
-    if (!assignment) {
-      logAudit({
-        schoolId,
-        userId: req.user?.id,
-        action: "WRONG_BUS_SCAN_ALERT",
-        entityType: "ATTENDANCE",
-        entityId: studentId,
-        newValues: { tripId, studentId, studentName: credential.student_name }
-      });
-      return res.status(400).json({
-        success: false,
-        error: "WRONG_BUS_ASSIGNMENT",
-        message: `Safety Alert: ${credential.student_name} (${credential.admission_number}) is not assigned to this bus route (${trip.route_id}).`
-      });
-    }
-    const existingEvents = db.prepare(`
+      if (!credential) {
+        logAudit({
+          schoolId,
+          userId: req.user?.id,
+          action: "QR_SCAN_REJECTED",
+          entityType: "ATTENDANCE",
+          newValues: { reason: "UNRECOGNIZED_QR_TOKEN", rawInput: qrPayload.substring(0, 20) }
+        });
+        return res.status(404).json({
+          success: false,
+          error: "INVALID_QR_BADGE",
+          message: "Unrecognized or unassigned QR badge. Student not found."
+        });
+      }
+      if (credential.is_revoked) {
+        return res.status(403).json({
+          success: false,
+          error: "REVOKED_QR_BADGE",
+          message: `This student QR badge was revoked (${credential.revoked_reason || "Lost card"}). Scan rejected.`
+        });
+      }
+      const studentId = credential.student_id;
+      const routeCol = trip.trip_type === "EVENING_DROP" ? "evening_route_id" : "morning_route_id";
+      const assignment = db.prepare(`SELECT * FROM transport_assignments WHERE student_id = ? AND ${routeCol} = ? AND is_active = 1`).get(studentId, trip.route_id);
+      if (!assignment) {
+        logAudit({
+          schoolId,
+          userId: req.user?.id,
+          action: "WRONG_BUS_SCAN_ALERT",
+          entityType: "ATTENDANCE",
+          entityId: studentId,
+          newValues: { tripId, studentId, studentName: credential.student_name }
+        });
+        return res.status(400).json({
+          success: false,
+          error: "WRONG_BUS_ASSIGNMENT",
+          message: `Safety Alert: ${credential.student_name} (${credential.admission_number}) is not assigned to this bus route (${trip.route_id}).`
+        });
+      }
+      const existingEvents = db.prepare(`
         SELECT event_type, scanned_at, id FROM attendance_events
         WHERE trip_id = ? AND student_id = ?
         ORDER BY scanned_at DESC
       `).all(tripId, studentId);
-    const hasBoarded = existingEvents.some((e) => e.event_type === "BOARDING");
-    const hasDropped = existingEvents.some((e) => e.event_type === "DROP_OFF");
-    let nextEventType = preferredEventType || (hasBoarded ? "DROP_OFF" : "BOARDING");
-    if (nextEventType === "BOARDING" && hasBoarded) {
-      return res.status(409).json({
-        success: false,
-        error: "DUPLICATE_BOARDING",
-        message: `${credential.student_name} was already boarded on this trip at ${existingEvents[0].scanned_at}.`
-      });
-    }
-    if (nextEventType === "DROP_OFF" && !hasBoarded) {
-      return res.status(409).json({
-        success: false,
-        error: "DROP_OFF_WITHOUT_BOARDING",
-        message: `Out-of-order scan: Cannot record drop-off for ${credential.student_name} because boarding was not previously recorded on this trip.`
-      });
-    }
-    if (nextEventType === "DROP_OFF" && hasDropped) {
-      return res.status(409).json({
-        success: false,
-        error: "DUPLICATE_DROP_OFF",
-        message: `${credential.student_name} was already dropped off from this trip.`
-      });
-    }
-    const eventId = `att_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
-    const effectiveStopId = stopId || (nextEventType === "BOARDING" ? assignment.morning_stop_id : assignment.evening_stop_id);
-    const stopRecord = effectiveStopId ? db.prepare("SELECT stop_name FROM route_stops WHERE id = ?").get(effectiveStopId) : null;
-    const stopName = stopRecord ? stopRecord.stop_name : "Designated Stop";
-    db.prepare(`
+      const hasBoarded = existingEvents.some((e) => e.event_type === "BOARDING");
+      const hasDropped = existingEvents.some((e) => e.event_type === "DROP_OFF");
+      let nextEventType = preferredEventType || (hasBoarded ? "DROP_OFF" : "BOARDING");
+      if (nextEventType === "BOARDING" && hasBoarded) {
+        return res.status(409).json({
+          success: false,
+          error: "DUPLICATE_BOARDING",
+          message: `${credential.student_name} was already boarded on this trip at ${existingEvents[0].scanned_at}.`
+        });
+      }
+      if (nextEventType === "DROP_OFF" && !hasBoarded) {
+        return res.status(409).json({
+          success: false,
+          error: "DROP_OFF_WITHOUT_BOARDING",
+          message: `Out-of-order scan: Cannot record drop-off for ${credential.student_name} because boarding was not previously recorded on this trip.`
+        });
+      }
+      if (nextEventType === "DROP_OFF" && hasDropped) {
+        return res.status(409).json({
+          success: false,
+          error: "DUPLICATE_DROP_OFF",
+          message: `${credential.student_name} was already dropped off from this trip.`
+        });
+      }
+      const eventId = `att_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+      const effectiveStopId = stopId || (nextEventType === "BOARDING" ? assignment.morning_stop_id : assignment.evening_stop_id);
+      const stopRecord = effectiveStopId ? db.prepare("SELECT stop_name FROM route_stops WHERE id = ?").get(effectiveStopId) : null;
+      const stopName = stopRecord ? stopRecord.stop_name : "Designated Stop";
+      db.prepare(`
       INSERT INTO attendance_events (
         id, school_id, trip_id, student_id, stop_id, event_type, scan_method,
         scanned_by_user_id, scanned_at, latitude, longitude, verification_status
       )
       VALUES (?, ?, ?, ?, ?, ?, 'QR', ?, datetime('now'), ?, ?, 'VERIFIED')
     `).run(
-      eventId,
-      schoolId,
-      tripId,
-      studentId,
-      effectiveStopId || null,
-      nextEventType,
-      req.user.id,
-      latitude ? parseFloat(latitude) : null,
-      longitude ? parseFloat(longitude) : null
-    );
-    notifyParentsOfAttendance(schoolId, studentId, tripId, nextEventType, stopName);
-    const eventPayload = {
-      id: eventId,
-      tripId,
-      studentId,
-      studentName: credential.student_name,
-      admissionNumber: credential.admission_number,
-      grade: credential.grade,
-      section: credential.section,
-      eventType: nextEventType,
-      scanMethod: "QR",
-      stopName,
-      scannedAt: (/* @__PURE__ */ new Date()).toISOString()
-    };
-    broadcastAttendanceEvent(tripId, eventPayload);
-    logAudit({
-      schoolId,
-      userId: req.user?.id,
-      action: `ATTENDANCE_${nextEventType}`,
-      entityType: "ATTENDANCE",
-      entityId: eventId,
-      newValues: eventPayload
-    });
-    return res.status(201).json({
-      success: true,
-      message: `${nextEventType === "BOARDING" ? "Boarding" : "Drop-off"} confirmed for ${credential.student_name}`,
-      event: eventPayload
-    });
+        eventId,
+        schoolId,
+        tripId,
+        studentId,
+        effectiveStopId || null,
+        nextEventType,
+        req.user.id,
+        latitude ? parseFloat(latitude) : null,
+        longitude ? parseFloat(longitude) : null
+      );
+      notifyParentsOfAttendance(schoolId, studentId, tripId, nextEventType, stopName);
+      const eventPayload = {
+        id: eventId,
+        tripId,
+        studentId,
+        studentName: credential.student_name,
+        admissionNumber: credential.admission_number,
+        grade: credential.grade,
+        section: credential.section,
+        eventType: nextEventType,
+        scanMethod: "QR",
+        stopName,
+        scannedAt: (/* @__PURE__ */ new Date()).toISOString()
+      };
+      broadcastAttendanceEvent(tripId, eventPayload);
+      logAudit({
+        schoolId,
+        userId: req.user?.id,
+        action: `ATTENDANCE_${nextEventType}`,
+        entityType: "ATTENDANCE",
+        entityId: eventId,
+        newValues: eventPayload
+      });
+      return res.status(201).json({
+        success: true,
+        message: `${nextEventType === "BOARDING" ? "Boarding" : "Drop-off"} confirmed for ${credential.student_name}`,
+        event: eventPayload
+      });
+    } catch (err) {
+      return formatSafeServerError(res, err, "SCAN_ATTENDANCE");
+    }
   }
 );
 attendanceRoutes.post(
@@ -4773,73 +4941,80 @@ attendanceRoutes.post(
   authenticate,
   requireSchoolContext(["DRIVER", "ATTENDANT", "TRANSPORT_MANAGER", "SCHOOL_ADMIN", "PLATFORM_ADMIN"]),
   (req, res) => {
-    const schoolId = req.schoolContext.schoolId;
-    const { tripId } = req.params;
-    const { studentId, eventType, stopId, manualReason, latitude, longitude } = req.body;
-    if (!studentId || !eventType || !manualReason) {
-      return res.status(400).json({
-        success: false,
-        error: "VALIDATION_ERROR",
-        message: "Student ID, event type (BOARDING or DROP_OFF), and mandatory manual reason are required."
-      });
-    }
-    const trip = db.prepare("SELECT * FROM trips WHERE id = ? AND school_id = ?").get(tripId, schoolId);
-    if (!trip || trip.status !== "IN_PROGRESS") {
-      return res.status(400).json({ success: false, error: "TRIP_NOT_ACTIVE" });
-    }
-    const student = db.prepare("SELECT * FROM students WHERE id = ? AND school_id = ?").get(studentId, schoolId);
-    if (!student) {
-      return res.status(404).json({ success: false, error: "STUDENT_NOT_FOUND" });
-    }
-    const eventId = `att_man_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
-    const stopRecord = stopId ? db.prepare("SELECT stop_name FROM route_stops WHERE id = ?").get(stopId) : null;
-    const stopName = stopRecord ? stopRecord.stop_name : "Manual Checkpoint";
-    db.prepare(`
+    try {
+      const schoolId = req.schoolContext?.schoolId;
+      if (!schoolId) {
+        return res.status(400).json({ success: false, error: "NO_SCHOOL_CONTEXT", message: "No school tenant context selected." });
+      }
+      const { tripId } = req.params;
+      const { studentId, eventType, stopId, manualReason, latitude, longitude } = req.body;
+      if (!studentId || !eventType || !manualReason) {
+        return res.status(400).json({
+          success: false,
+          error: "VALIDATION_ERROR",
+          message: "Student ID, event type (BOARDING or DROP_OFF), and mandatory manual reason are required."
+        });
+      }
+      const trip = db.prepare("SELECT * FROM trips WHERE id = ? AND school_id = ?").get(tripId, schoolId);
+      if (!trip || trip.status !== "IN_PROGRESS") {
+        return res.status(400).json({ success: false, error: "TRIP_NOT_ACTIVE" });
+      }
+      const student = db.prepare("SELECT * FROM students WHERE id = ? AND school_id = ?").get(studentId, schoolId);
+      if (!student) {
+        return res.status(404).json({ success: false, error: "STUDENT_NOT_FOUND" });
+      }
+      const eventId = `att_man_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+      const stopRecord = stopId ? db.prepare("SELECT stop_name FROM route_stops WHERE id = ?").get(stopId) : null;
+      const stopName = stopRecord ? stopRecord.stop_name : "Manual Checkpoint";
+      db.prepare(`
       INSERT INTO attendance_events (
         id, school_id, trip_id, student_id, stop_id, event_type, scan_method,
         scanned_by_user_id, scanned_at, latitude, longitude, manual_reason, verification_status
       )
       VALUES (?, ?, ?, ?, ?, ?, 'MANUAL', ?, datetime('now'), ?, ?, ?, 'FLAGGED')
     `).run(
-      eventId,
-      schoolId,
-      tripId,
-      studentId,
-      stopId || null,
-      eventType,
-      req.user.id,
-      latitude ? parseFloat(latitude) : null,
-      longitude ? parseFloat(longitude) : null,
-      manualReason
-    );
-    notifyParentsOfAttendance(schoolId, studentId, tripId, eventType, stopName);
-    const eventPayload = {
-      id: eventId,
-      tripId,
-      studentId,
-      studentName: student.full_name,
-      admissionNumber: student.admission_number,
-      grade: student.grade,
-      section: student.section,
-      eventType,
-      scanMethod: "MANUAL",
-      manualReason,
-      stopName,
-      scannedAt: (/* @__PURE__ */ new Date()).toISOString()
-    };
-    broadcastAttendanceEvent(tripId, eventPayload);
-    logAudit({
-      schoolId,
-      userId: req.user?.id,
-      action: `MANUAL_ATTENDANCE_${eventType}`,
-      entityType: "ATTENDANCE",
-      newValues: eventPayload
-    });
-    return res.status(201).json({
-      success: true,
-      message: `Manual ${eventType} logged for ${student.full_name}. Reason audited.`,
-      event: eventPayload
-    });
+        eventId,
+        schoolId,
+        tripId,
+        studentId,
+        stopId || null,
+        eventType,
+        req.user.id,
+        latitude ? parseFloat(latitude) : null,
+        longitude ? parseFloat(longitude) : null,
+        manualReason
+      );
+      notifyParentsOfAttendance(schoolId, studentId, tripId, eventType, stopName);
+      const eventPayload = {
+        id: eventId,
+        tripId,
+        studentId,
+        studentName: student.full_name,
+        admissionNumber: student.admission_number,
+        grade: student.grade,
+        section: student.section,
+        eventType,
+        scanMethod: "MANUAL",
+        manualReason,
+        stopName,
+        scannedAt: (/* @__PURE__ */ new Date()).toISOString()
+      };
+      broadcastAttendanceEvent(tripId, eventPayload);
+      logAudit({
+        schoolId,
+        userId: req.user?.id,
+        action: `MANUAL_ATTENDANCE_${eventType}`,
+        entityType: "ATTENDANCE",
+        newValues: eventPayload
+      });
+      return res.status(201).json({
+        success: true,
+        message: `Manual ${eventType} logged for ${student.full_name}. Reason audited.`,
+        event: eventPayload
+      });
+    } catch (err) {
+      return formatSafeServerError(res, err, "MANUAL_ATTENDANCE");
+    }
   }
 );
 
