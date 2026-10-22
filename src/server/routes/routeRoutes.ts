@@ -77,7 +77,15 @@ routeRoutes.post(
   authenticate,
   requireSchoolContext(['SCHOOL_ADMIN', 'TRANSPORT_MANAGER', 'PLATFORM_ADMIN']),
   (req: AuthRequest, res: Response) => {
-    const schoolId = req.schoolContext!.schoolId;
+    const schoolId = req.schoolContext?.schoolId;
+    if (!schoolId) {
+      return res.status(400).json({
+        success: false,
+        error: 'NO_SCHOOL_CONTEXT',
+        message: 'No school specified or selected. Please select a school first.',
+      });
+    }
+
     const {
       routeCode,
       name,
@@ -164,7 +172,7 @@ routeRoutes.post(
 
       return res.status(201).json({ success: true, message: 'Route created successfully', routeId });
     } catch (err: any) {
-      db.exec('ROLLBACK;');
+      try { db.exec('ROLLBACK;'); } catch (_) {}
       return formatSafeServerError(res, err, 'CREATE_ROUTE');
     }
   }

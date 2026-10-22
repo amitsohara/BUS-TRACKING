@@ -137,7 +137,15 @@ studentRoutes.post(
   authenticate,
   requireSchoolContext(['SCHOOL_ADMIN', 'TRANSPORT_MANAGER', 'PLATFORM_ADMIN']),
   async (req: AuthRequest, res: Response) => {
-    const schoolId = req.schoolContext!.schoolId;
+    const schoolId = req.schoolContext?.schoolId;
+    if (!schoolId) {
+      return res.status(400).json({
+        success: false,
+        error: 'NO_SCHOOL_CONTEXT',
+        message: 'No school specified or selected. Please select a school first.',
+      });
+    }
+
     const {
       admissionNumber,
       fullName,
@@ -235,7 +243,7 @@ studentRoutes.post(
         studentId,
       });
     } catch (err: any) {
-      db.exec('ROLLBACK;');
+      try { db.exec('ROLLBACK;'); } catch (_) {}
       return formatSafeServerError(res, err, 'CREATE_STUDENT');
     }
   }

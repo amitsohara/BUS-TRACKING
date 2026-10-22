@@ -28,7 +28,15 @@ driverRoutes.post(
   authenticate,
   requireSchoolContext(['SCHOOL_ADMIN', 'TRANSPORT_MANAGER', 'PLATFORM_ADMIN']),
   async (req: AuthRequest, res: Response) => {
-    const schoolId = req.schoolContext!.schoolId;
+    const schoolId = req.schoolContext?.schoolId;
+    if (!schoolId) {
+      return res.status(400).json({
+        success: false,
+        error: 'NO_SCHOOL_CONTEXT',
+        message: 'No school specified or selected. Please select a school first.',
+      });
+    }
+
     const {
       fullName,
       phone,
@@ -125,7 +133,7 @@ driverRoutes.post(
 
       return res.status(201).json({ success: true, message: 'Driver registered successfully', driverId });
     } catch (err: any) {
-      db.exec('ROLLBACK;');
+      try { db.exec('ROLLBACK;'); } catch (_) {}
       return formatSafeServerError(res, err, 'CREATE_DRIVER');
     }
   }

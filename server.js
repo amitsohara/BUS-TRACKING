@@ -1193,8 +1193,15 @@ function requireSchoolContext(allowedRoles) {
     }
     const requestedSchoolId = req.headers["x-school-id"] || req.params.schoolId || req.query.schoolId || req.body && req.body.schoolId;
     if (req.user.systemRole === "PLATFORM_ADMIN") {
-      if (requestedSchoolId) {
-        const schoolRow = db.prepare("SELECT id, name, code FROM schools WHERE id = ?").get(requestedSchoolId);
+      let targetSchoolId2 = requestedSchoolId;
+      if (!targetSchoolId2) {
+        const firstSchool = db.prepare('SELECT id, name, code FROM schools WHERE status = "ACTIVE" ORDER BY created_at ASC LIMIT 1').get();
+        if (firstSchool) {
+          targetSchoolId2 = firstSchool.id;
+        }
+      }
+      if (targetSchoolId2) {
+        const schoolRow = db.prepare("SELECT id, name, code FROM schools WHERE id = ?").get(targetSchoolId2);
         if (schoolRow) {
           req.schoolContext = {
             schoolId: schoolRow.id,
@@ -1515,7 +1522,10 @@ authRoutes.post("/register-school", async (req, res) => {
       }
     });
   } catch (err) {
-    db.exec("ROLLBACK;");
+    try {
+      db.exec("ROLLBACK;");
+    } catch (_) {
+    }
     console.error("[Register School Error]", err);
     return res.status(500).json({
       success: false,
@@ -1639,7 +1649,10 @@ authRoutes.delete("/me", authenticate, (req, res) => {
       message: "Your account and personal data have been permanently anonymized and deleted."
     });
   } catch (err) {
-    db.exec("ROLLBACK;");
+    try {
+      db.exec("ROLLBACK;");
+    } catch (_) {
+    }
     console.error("[Account Deletion Error]", err?.message || "[REDACTED_ERROR]");
     return res.status(500).json({ success: false, error: "SERVER_ERROR", message: "Failed to process account deletion." });
   }
@@ -1819,7 +1832,10 @@ authRoutes.post("/accept-invitation", async (req, res) => {
       }
     });
   } catch (err) {
-    db.exec("ROLLBACK;");
+    try {
+      db.exec("ROLLBACK;");
+    } catch (_) {
+    }
     return res.status(500).json({ success: false, error: "SERVER_ERROR", message: "Failed to activate account." });
   }
 });
@@ -1910,7 +1926,10 @@ authRoutes.post("/reset-password", async (req, res) => {
     });
     return res.json({ success: true, message: "Password has been reset successfully. Please log in with your new password." });
   } catch (err) {
-    db.exec("ROLLBACK;");
+    try {
+      db.exec("ROLLBACK;");
+    } catch (_) {
+    }
     return formatSafeServerError(res, err, "RESET_PASSWORD");
   }
 });
@@ -2159,7 +2178,10 @@ schoolRoutes.post("/", authenticate, (req, res) => {
       initialInvitation
     });
   } catch (err) {
-    db.exec("ROLLBACK;");
+    try {
+      db.exec("ROLLBACK;");
+    } catch (_) {
+    }
     console.error("[Create School Error]", err?.message || "[REDACTED_ERROR]");
     return res.status(500).json({
       success: false,
@@ -2828,7 +2850,14 @@ studentRoutes.post(
   authenticate,
   requireSchoolContext(["SCHOOL_ADMIN", "TRANSPORT_MANAGER", "PLATFORM_ADMIN"]),
   async (req, res) => {
-    const schoolId = req.schoolContext.schoolId;
+    const schoolId = req.schoolContext?.schoolId;
+    if (!schoolId) {
+      return res.status(400).json({
+        success: false,
+        error: "NO_SCHOOL_CONTEXT",
+        message: "No school specified or selected. Please select a school first."
+      });
+    }
     const {
       admissionNumber,
       fullName,
@@ -2910,7 +2939,10 @@ studentRoutes.post(
         studentId
       });
     } catch (err) {
-      db.exec("ROLLBACK;");
+      try {
+        db.exec("ROLLBACK;");
+      } catch (_) {
+      }
       return formatSafeServerError(res, err, "CREATE_STUDENT");
     }
   }
@@ -3109,7 +3141,14 @@ vehicleRoutes.post(
   authenticate,
   requireSchoolContext(["SCHOOL_ADMIN", "TRANSPORT_MANAGER", "PLATFORM_ADMIN"]),
   (req, res) => {
-    const schoolId = req.schoolContext.schoolId;
+    const schoolId = req.schoolContext?.schoolId;
+    if (!schoolId) {
+      return res.status(400).json({
+        success: false,
+        error: "NO_SCHOOL_CONTEXT",
+        message: "No school specified or selected. Please select a school first."
+      });
+    }
     const {
       registrationNumber,
       busNumber,
@@ -3246,7 +3285,14 @@ driverRoutes.post(
   authenticate,
   requireSchoolContext(["SCHOOL_ADMIN", "TRANSPORT_MANAGER", "PLATFORM_ADMIN"]),
   async (req, res) => {
-    const schoolId = req.schoolContext.schoolId;
+    const schoolId = req.schoolContext?.schoolId;
+    if (!schoolId) {
+      return res.status(400).json({
+        success: false,
+        error: "NO_SCHOOL_CONTEXT",
+        message: "No school specified or selected. Please select a school first."
+      });
+    }
     const {
       fullName,
       phone,
@@ -3328,7 +3374,10 @@ driverRoutes.post(
       });
       return res.status(201).json({ success: true, message: "Driver registered successfully", driverId });
     } catch (err) {
-      db.exec("ROLLBACK;");
+      try {
+        db.exec("ROLLBACK;");
+      } catch (_) {
+      }
       return formatSafeServerError(res, err, "CREATE_DRIVER");
     }
   }
@@ -3451,7 +3500,14 @@ routeRoutes.post(
   authenticate,
   requireSchoolContext(["SCHOOL_ADMIN", "TRANSPORT_MANAGER", "PLATFORM_ADMIN"]),
   (req, res) => {
-    const schoolId = req.schoolContext.schoolId;
+    const schoolId = req.schoolContext?.schoolId;
+    if (!schoolId) {
+      return res.status(400).json({
+        success: false,
+        error: "NO_SCHOOL_CONTEXT",
+        message: "No school specified or selected. Please select a school first."
+      });
+    }
     const {
       routeCode,
       name,
@@ -3526,7 +3582,10 @@ routeRoutes.post(
       });
       return res.status(201).json({ success: true, message: "Route created successfully", routeId });
     } catch (err) {
-      db.exec("ROLLBACK;");
+      try {
+        db.exec("ROLLBACK;");
+      } catch (_) {
+      }
       return formatSafeServerError(res, err, "CREATE_ROUTE");
     }
   }

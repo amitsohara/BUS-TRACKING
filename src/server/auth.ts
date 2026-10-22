@@ -206,10 +206,21 @@ export function requireSchoolContext(allowedRoles?: string[]) {
       (req.body && req.body.schoolId);
 
     if (req.user.systemRole === 'PLATFORM_ADMIN') {
-      if (requestedSchoolId) {
+      let targetSchoolId = requestedSchoolId;
+      if (!targetSchoolId) {
+        // Auto-select first active school as context if none specified
+        const firstSchool = db
+          .prepare('SELECT id, name, code FROM schools WHERE status = "ACTIVE" ORDER BY created_at ASC LIMIT 1')
+          .get() as any;
+        if (firstSchool) {
+          targetSchoolId = firstSchool.id;
+        }
+      }
+
+      if (targetSchoolId) {
         const schoolRow = db
           .prepare('SELECT id, name, code FROM schools WHERE id = ?')
-          .get(requestedSchoolId) as any;
+          .get(targetSchoolId) as any;
         if (schoolRow) {
           req.schoolContext = {
             schoolId: schoolRow.id,
@@ -220,7 +231,7 @@ export function requireSchoolContext(allowedRoles?: string[]) {
           return next();
         }
       }
-      // If platform admin without specific school header, proceed if route permits
+      // If platform admin without specific school header and zero schools exist
       if (!allowedRoles || allowedRoles.includes('PLATFORM_ADMIN')) {
         return next();
       }

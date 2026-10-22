@@ -83,7 +83,17 @@ class ApiService {
       return (await res.blob()) as unknown as T;
     }
 
-    const data = await res.json();
+    const text = await res.text();
+    let data: any;
+    try {
+      data = JSON.parse(text);
+    } catch (_err) {
+      if (!res.ok) {
+        throw new Error(`Server returned HTTP ${res.status}. Please check backend logs.`);
+      }
+      throw new Error(`Invalid response format from server (HTTP ${res.status}).`);
+    }
+
     if (!res.ok || data.success === false) {
       throw new Error(data.message || data.error || `HTTP ${res.status}`);
     }

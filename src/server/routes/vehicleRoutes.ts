@@ -28,7 +28,14 @@ vehicleRoutes.post(
   authenticate,
   requireSchoolContext(['SCHOOL_ADMIN', 'TRANSPORT_MANAGER', 'PLATFORM_ADMIN']),
   (req: AuthRequest, res: Response) => {
-    const schoolId = req.schoolContext!.schoolId;
+    const schoolId = req.schoolContext?.schoolId;
+    if (!schoolId) {
+      return res.status(400).json({
+        success: false,
+        error: 'NO_SCHOOL_CONTEXT',
+        message: 'No school specified or selected. Please select a school first.',
+      });
+    }
     const {
       registrationNumber,
       busNumber,

@@ -281,7 +281,7 @@ authRoutes.post('/register-school', async (req: AuthRequest, res: Response) => {
       },
     });
   } catch (err: any) {
-    db.exec('ROLLBACK;');
+    try { db.exec('ROLLBACK;'); } catch (_) {}
     console.error('[Register School Error]', err);
     return res.status(500).json({
       success: false,
@@ -438,7 +438,7 @@ authRoutes.delete('/me', authenticate, (req: AuthRequest, res: Response) => {
       message: 'Your account and personal data have been permanently anonymized and deleted.',
     });
   } catch (err: any) {
-    db.exec('ROLLBACK;');
+    try { db.exec('ROLLBACK;'); } catch (_) {}
     console.error('[Account Deletion Error]', err?.message || '[REDACTED_ERROR]');
     return res.status(500).json({ success: false, error: 'SERVER_ERROR', message: 'Failed to process account deletion.' });
   }
@@ -657,7 +657,7 @@ authRoutes.post('/accept-invitation', async (req: AuthRequest, res: Response) =>
       },
     });
   } catch (err: any) {
-    db.exec('ROLLBACK;');
+    try { db.exec('ROLLBACK;'); } catch (_) {}
     return res.status(500).json({ success: false, error: 'SERVER_ERROR', message: 'Failed to activate account.' });
   }
 });
@@ -774,7 +774,7 @@ authRoutes.post('/reset-password', async (req: AuthRequest, res: Response) => {
 
     return res.json({ success: true, message: 'Password has been reset successfully. Please log in with your new password.' });
   } catch (err: any) {
-    db.exec('ROLLBACK;');
+    try { db.exec('ROLLBACK;'); } catch (_) {}
     return formatSafeServerError(res, err, 'RESET_PASSWORD');
   }
 });

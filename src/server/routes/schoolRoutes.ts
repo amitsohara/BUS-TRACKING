@@ -300,7 +300,7 @@ schoolRoutes.post('/', authenticate, (req: AuthRequest, res: Response) => {
       initialInvitation,
     });
   } catch (err: any) {
-    db.exec('ROLLBACK;');
+    try { db.exec('ROLLBACK;'); } catch (_) {}
     console.error('[Create School Error]', err?.message || '[REDACTED_ERROR]');
     return res.status(500).json({
       success: false,
