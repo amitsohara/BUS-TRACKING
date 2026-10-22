@@ -6,9 +6,9 @@ import { validateSecurityConfig } from './securityConfig.ts';
 export async function seedInitialData() {
   const config = validateSecurityConfig();
 
-  // In production, NEVER seed sample demo data
-  if (config.isProduction) {
-    console.log('[Seed] Production environment detected: Sample demo data seeding is strictly skipped.');
+  // Require explicit opt-in via SEED_SAMPLE_DATA=true
+  if (!config.seedSampleData) {
+    console.log('[Seed] SEED_SAMPLE_DATA is not set to true. Skipping sample data population.');
     return;
   }
 

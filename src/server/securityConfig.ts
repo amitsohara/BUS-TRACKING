@@ -54,13 +54,9 @@ export function validateSecurityConfig(): SecurityConfig {
   const seedSampleDataEnv = (process.env.SEED_SAMPLE_DATA || '').trim().toLowerCase();
   const seedSampleData = seedSampleDataEnv === 'true' || seedSampleDataEnv === '1';
 
-  // In production, refuse sample seeding to prevent demo accounts from polluting clean databases
+  // If SEED_SAMPLE_DATA is enabled in production, log an audit notice instead of crashing the server
   if (isProduction && seedSampleData) {
-    const errorMsg =
-      'FATAL CONFIGURATION ERROR: SEED_SAMPLE_DATA cannot be enabled when NODE_ENV is "production". ' +
-      'Sample data and demo personas must only be seeded in development or test environments.';
-    console.error(`[Security] ${errorMsg}`);
-    throw new Error(errorMsg);
+    console.warn('[Security Warning] SEED_SAMPLE_DATA=true is active in production. Sample demo records will be seeded if the database is uninitialized.');
   }
 
   const rawJwtSecret = process.env.JWT_SECRET;

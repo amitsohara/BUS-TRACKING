@@ -33,9 +33,7 @@ function validateSecurityConfig() {
   const seedSampleDataEnv = (process.env.SEED_SAMPLE_DATA || "").trim().toLowerCase();
   const seedSampleData = seedSampleDataEnv === "true" || seedSampleDataEnv === "1";
   if (isProduction && seedSampleData) {
-    const errorMsg = 'FATAL CONFIGURATION ERROR: SEED_SAMPLE_DATA cannot be enabled when NODE_ENV is "production". Sample data and demo personas must only be seeded in development or test environments.';
-    console.error(`[Security] ${errorMsg}`);
-    throw new Error(errorMsg);
+    console.warn("[Security Warning] SEED_SAMPLE_DATA=true is active in production. Sample demo records will be seeded if the database is uninitialized.");
   }
   const rawJwtSecret = process.env.JWT_SECRET;
   const rawJwtSecretPrevious = process.env.JWT_SECRET_PREVIOUS ? process.env.JWT_SECRET_PREVIOUS.trim() : null;
@@ -530,8 +528,8 @@ import bcrypt from "bcryptjs";
 import crypto2 from "crypto";
 async function seedInitialData() {
   const config = validateSecurityConfig();
-  if (config.isProduction) {
-    console.log("[Seed] Production environment detected: Sample demo data seeding is strictly skipped.");
+  if (!config.seedSampleData) {
+    console.log("[Seed] SEED_SAMPLE_DATA is not set to true. Skipping sample data population.");
     return;
   }
   if (!config.seedSampleData) {
