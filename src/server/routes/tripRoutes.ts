@@ -313,7 +313,7 @@ tripRoutes.post(
 
       return res.status(201).json({ success: true, message: 'Trip scheduled successfully', tripId });
     } catch (err: any) {
-      db.exec('ROLLBACK;');
+      try { db.exec('ROLLBACK;'); } catch (_) {}
       return formatSafeServerError(res, err, 'SCHEDULE_TRIP');
     }
   }

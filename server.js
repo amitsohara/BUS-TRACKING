@@ -99,20 +99,45 @@ import { DatabaseSync } from "node:sqlite";
 import path from "node:path";
 import fs from "node:fs";
 var DB_DIR = path.resolve(process.cwd(), "data");
-if (!fs.existsSync(DB_DIR)) {
-  fs.mkdirSync(DB_DIR, { recursive: true, mode: 448 });
-}
 var resolvedDbPath = path.join(DB_DIR, "schoolbus.db");
 if (process.env.SQLITE_DB_PATH) {
   const candidatePath = path.resolve(process.cwd(), process.env.SQLITE_DB_PATH);
   resolvedDbPath = candidatePath;
 }
+var targetDir = path.dirname(resolvedDbPath);
+if (!fs.existsSync(targetDir)) {
+  fs.mkdirSync(targetDir, { recursive: true, mode: 493 });
+}
 var db = new DatabaseSync(resolvedDbPath);
 db.exec("PRAGMA foreign_keys = ON;");
-db.exec("PRAGMA journal_mode = WAL;");
 db.exec("PRAGMA synchronous = NORMAL;");
-db.exec("PRAGMA busy_timeout = 5000;");
-console.log(`[Database] Connected to persistent SQLite database at: ${resolvedDbPath} (Engine: Embedded zero-port WAL)`);
+db.exec("PRAGMA busy_timeout = 10000;");
+try {
+  db.exec("PRAGMA journal_mode = WAL;");
+  db.exec("PRAGMA wal_autocheckpoint = 100;");
+} catch (err) {
+  console.warn("[Database] WAL mode unsupported on this filesystem, falling back to DELETE mode:", err);
+  try {
+    db.exec("PRAGMA journal_mode = DELETE;");
+  } catch (_) {
+  }
+}
+function flushDatabase() {
+  try {
+    db.exec("PRAGMA wal_checkpoint(TRUNCATE);");
+  } catch (_) {
+  }
+}
+process.on("exit", flushDatabase);
+process.on("SIGINT", () => {
+  flushDatabase();
+  process.exit(0);
+});
+process.on("SIGTERM", () => {
+  flushDatabase();
+  process.exit(0);
+});
+console.log(`[Database] Connected to persistent SQLite database at: ${resolvedDbPath}`);
 
 // src/server/schema.ts
 function runMigrations() {
@@ -3979,7 +4004,10 @@ tripRoutes.post(
       });
       return res.status(201).json({ success: true, message: "Trip scheduled successfully", tripId });
     } catch (err) {
-      db.exec("ROLLBACK;");
+      try {
+        db.exec("ROLLBACK;");
+      } catch (_) {
+      }
       return formatSafeServerError(res, err, "SCHEDULE_TRIP");
     }
   }
