@@ -7,7 +7,9 @@ const DB_DIR = path.resolve(process.cwd(), 'data');
 // Path normalization & traversal defense: ensure database stays within designated app workspace
 let resolvedDbPath = path.join(DB_DIR, 'schoolbus.db');
 if (process.env.SQLITE_DB_PATH) {
-  const candidatePath = path.resolve(process.cwd(), process.env.SQLITE_DB_PATH);
+  const candidatePath = path.isAbsolute(process.env.SQLITE_DB_PATH)
+    ? process.env.SQLITE_DB_PATH
+    : path.resolve(process.cwd(), process.env.SQLITE_DB_PATH);
   resolvedDbPath = candidatePath;
 }
 

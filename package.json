@@ -9,6 +9,7 @@
     "start": "node server.js",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
+    "db:backup": "tsx src/server/backup.ts",
     "lint": "tsc --noEmit",
     "test": "tsx tests/run-all-tests.ts"
   },
