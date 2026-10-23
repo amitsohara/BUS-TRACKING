@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { api } from '../services/api.ts';
-import { Bus, Plus, ShieldCheck, AlertTriangle } from 'lucide-react';
+import { Bus, Plus, ShieldCheck, AlertTriangle, Edit2 } from 'lucide-react';
 
 export const VehiclesManagementView: React.FC = () => {
   const [vehicles, setVehicles] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [createModalOpen, setCreateModalOpen] = useState(false);
+  const [editVehicle, setEditVehicle] = useState<any | null>(null);
 
   // Form state
   const [registrationNumber, setRegistrationNumber] = useState('');
@@ -15,6 +16,14 @@ export const VehiclesManagementView: React.FC = () => {
   const [fuelType, setFuelType] = useState('CNG');
   const [gpsDeviceId, setGpsDeviceId] = useState('');
   const [submitting, setSubmitting] = useState(false);
+
+  // Edit Form state
+  const [editBusNumber, setEditBusNumber] = useState('');
+  const [editCapacity, setEditCapacity] = useState('42');
+  const [editModel, setEditModel] = useState('');
+  const [editFuelType, setEditFuelType] = useState('CNG');
+  const [editGpsDeviceId, setEditGpsDeviceId] = useState('');
+  const [editStatus, setEditStatus] = useState('ACTIVE');
 
   useEffect(() => {
     loadVehicles();
@@ -56,6 +65,39 @@ export const VehiclesManagementView: React.FC = () => {
     }
   };
 
+  const handleOpenEdit = (v: any) => {
+    setEditVehicle(v);
+    setEditBusNumber(v.bus_number || '');
+    setEditCapacity(String(v.capacity || 42));
+    setEditModel(v.model || '');
+    setEditFuelType(v.fuel_type || 'CNG');
+    setEditGpsDeviceId(v.gps_device_id || '');
+    setEditStatus(v.status || 'ACTIVE');
+  };
+
+  const handleUpdateVehicle = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editVehicle) return;
+    setSubmitting(true);
+    try {
+      await api.updateVehicle(editVehicle.id, {
+        busNumber: editBusNumber,
+        capacity: parseInt(editCapacity, 10),
+        model: editModel,
+        fuelType: editFuelType,
+        gpsDeviceId: editGpsDeviceId,
+        status: editStatus,
+      });
+      alert('Vehicle details updated successfully.');
+      setEditVehicle(null);
+      loadVehicles();
+    } catch (err: any) {
+      alert(err.message || 'Failed to update vehicle');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -86,16 +128,25 @@ export const VehiclesManagementView: React.FC = () => {
           <div className="col-span-3 py-16 text-center text-slate-400">No vehicles registered yet.</div>
         ) : (
           vehicles.map((v) => (
-            <div key={v.id} className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-3">
+            <div key={v.id} className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-3 relative group">
               <div className="flex items-center justify-between">
                 <span className="text-xs font-bold px-2 py-0.5 bg-amber-100 text-amber-800 rounded-lg">
                   {v.bus_number}
                 </span>
-                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                  v.status === 'ACTIVE' ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-200 text-slate-600'
-                }`}>
-                  {v.status}
-                </span>
+                <div className="flex items-center space-x-2">
+                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                    v.status === 'ACTIVE' ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-200 text-slate-600'
+                  }`}>
+                    {v.status}
+                  </span>
+                  <button
+                    onClick={() => handleOpenEdit(v)}
+                    className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition cursor-pointer"
+                    title="Edit Bus Details"
+                  >
+                    <Edit2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
               </div>
 
               <div>
@@ -215,6 +266,107 @@ export const VehiclesManagementView: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setCreateModalOpen(false)}
+                  className="px-4 py-2 border border-slate-300 hover:bg-slate-50 text-slate-700 rounded-xl text-xs font-semibold transition cursor-pointer"
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Vehicle Modal */}
+      {editVehicle && (
+        <div className="fixed inset-0 z-[2000] flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 border border-slate-100">
+            <h3 className="font-bold text-slate-800 text-base mb-1">Edit Vehicle Details</h3>
+            <p className="text-xs text-slate-500 mb-4">Editing bus {editVehicle.registration_number}</p>
+
+            <form onSubmit={handleUpdateVehicle} className="space-y-3">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Bus Number *</label>
+                  <input
+                    type="text"
+                    required
+                    value={editBusNumber}
+                    onChange={(e) => setEditBusNumber(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Passenger Capacity *</label>
+                  <input
+                    type="number"
+                    required
+                    min={10}
+                    max={80}
+                    value={editCapacity}
+                    onChange={(e) => setEditCapacity(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-mono"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Bus Model / Make</label>
+                <input
+                  type="text"
+                  value={editModel}
+                  onChange={(e) => setEditModel(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Fuel Type</label>
+                  <select
+                    value={editFuelType}
+                    onChange={(e) => setEditFuelType(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs"
+                  >
+                    <option value="CNG">CNG</option>
+                    <option value="DIESEL">DIESEL</option>
+                    <option value="ELECTRIC">ELECTRIC</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Vehicle Status</label>
+                  <select
+                    value={editStatus}
+                    onChange={(e) => setEditStatus(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs"
+                  >
+                    <option value="ACTIVE">ACTIVE</option>
+                    <option value="MAINTENANCE">MAINTENANCE</option>
+                    <option value="RETIRED">RETIRED</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">GPS Device ID</label>
+                <input
+                  type="text"
+                  value={editGpsDeviceId}
+                  onChange={(e) => setEditGpsDeviceId(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-mono"
+                />
+              </div>
+
+              <div className="flex gap-2 pt-3">
+                <button
+                  type="submit"
+                  disabled={submitting}
+                  className="flex-1 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold transition cursor-pointer"
+                >
+                  {submitting ? 'Saving...' : 'Save Changes'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setEditVehicle(null)}
                   className="px-4 py-2 border border-slate-300 hover:bg-slate-50 text-slate-700 rounded-xl text-xs font-semibold transition cursor-pointer"
                 >
                   Cancel

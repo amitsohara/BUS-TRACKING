@@ -12,6 +12,9 @@ import {
   ChevronLeft,
   ChevronRight,
   Filter,
+  UserPlus,
+  ShieldCheck,
+  UserCheck,
 } from 'lucide-react';
 
 export const StudentsManagementView: React.FC = () => {
@@ -24,6 +27,10 @@ export const StudentsManagementView: React.FC = () => {
   // Modals
   const [badgeStudentId, setBadgeStudentId] = useState<string | null>(null);
   const [createModalOpen, setCreateModalOpen] = useState(false);
+  const [editStudentModal, setEditStudentModal] = useState<any | null>(null);
+  const [linkParentStudent, setLinkParentStudent] = useState<any | null>(null);
+  const [viewGuardiansStudent, setViewGuardiansStudent] = useState<any | null>(null);
+  const [editGuardian, setEditGuardian] = useState<any | null>(null);
   const [routes, setRoutes] = useState<any[]>([]);
 
   // New Student Form State
@@ -35,6 +42,38 @@ export const StudentsManagementView: React.FC = () => {
   const [bloodGroup, setBloodGroup] = useState('B+');
   const [homeAddress, setHomeAddress] = useState('');
   const [selectedRouteId, setSelectedRouteId] = useState('');
+
+  // Optional Parent Registration in Student Creation
+  const [includeParent, setIncludeParent] = useState(false);
+  const [parentName, setParentName] = useState('');
+  const [parentPhone, setParentPhone] = useState('');
+  const [parentEmail, setParentEmail] = useState('');
+  const [parentRelationship, setParentRelationship] = useState('FATHER');
+  const [parentPassword, setParentPassword] = useState('');
+
+  // Link Parent Form State (Dedicated Modal)
+  const [linkGuardianName, setLinkGuardianName] = useState('');
+  const [linkGuardianPhone, setLinkGuardianPhone] = useState('');
+  const [linkGuardianEmail, setLinkGuardianEmail] = useState('');
+  const [linkGuardianRel, setLinkGuardianRel] = useState('FATHER');
+  const [linkGuardianPassword, setLinkGuardianPassword] = useState('');
+
+  // Edit Student Form State
+  const [editFullName, setEditFullName] = useState('');
+  const [editGrade, setEditGrade] = useState('5');
+  const [editSection, setEditSection] = useState('A');
+  const [editEmergencyPhone, setEditEmergencyPhone] = useState('');
+  const [editBloodGroup, setEditBloodGroup] = useState('B+');
+  const [editHomeAddress, setEditHomeAddress] = useState('');
+  const [editStatus, setEditStatus] = useState('ACTIVE');
+  const [editRouteId, setEditRouteId] = useState('');
+
+  // Edit Guardian Form State
+  const [editGName, setEditGName] = useState('');
+  const [editGPhone, setEditGPhone] = useState('');
+  const [editGEmail, setEditGEmail] = useState('');
+  const [editGRel, setEditGRel] = useState('FATHER');
+
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
@@ -74,15 +113,129 @@ export const StudentsManagementView: React.FC = () => {
         homeAddress,
         morningRouteId: selectedRouteId || null,
         eveningRouteId: selectedRouteId || null,
+        parentName: includeParent ? parentName : undefined,
+        parentPhone: includeParent ? parentPhone : undefined,
+        parentEmail: includeParent ? parentEmail : undefined,
+        parentRelationship: includeParent ? parentRelationship : undefined,
+        parentPassword: includeParent ? parentPassword : undefined,
       });
       alert('Student registered successfully with cryptographic QR transit pass.');
       setCreateModalOpen(false);
       setFullName('');
       setAdmissionNumber('');
       setEmergencyPhone('');
+      setParentName('');
+      setParentPhone('');
+      setParentEmail('');
+      setParentPassword('');
+      setIncludeParent(false);
       loadStudents(1);
     } catch (err: any) {
       alert(err.message || 'Failed to register student');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleOpenEditStudent = (st: any) => {
+    setEditStudentModal(st);
+    setEditFullName(st.full_name || '');
+    setEditGrade(st.grade || '5');
+    setEditSection(st.section || 'A');
+    setEditEmergencyPhone(st.emergency_phone || '');
+    setEditBloodGroup(st.blood_group || 'B+');
+    setEditHomeAddress(st.home_address || '');
+    setEditStatus(st.status || 'ACTIVE');
+    setEditRouteId(st.morning_route_id || '');
+  };
+
+  const handleUpdateStudent = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editStudentModal) return;
+    setSubmitting(true);
+    try {
+      await api.updateStudent(editStudentModal.id, {
+        fullName: editFullName,
+        grade: editGrade,
+        section: editSection,
+        emergencyPhone: editEmergencyPhone,
+        bloodGroup: editBloodGroup,
+        homeAddress: editHomeAddress,
+        status: editStatus,
+        morningRouteId: editRouteId || null,
+        eveningRouteId: editRouteId || null,
+      });
+      alert('Student record updated successfully.');
+      setEditStudentModal(null);
+      loadStudents(pagination.page);
+    } catch (err: any) {
+      alert(err.message || 'Failed to update student');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleLinkParent = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!linkParentStudent) return;
+    setSubmitting(true);
+    try {
+      const res = await api.addStudentGuardian(linkParentStudent.id, {
+        fullName: linkGuardianName,
+        phone: linkGuardianPhone,
+        email: linkGuardianEmail,
+        relationship: linkGuardianRel,
+        password: linkGuardianPassword,
+      });
+      alert(res.message || 'Parent / Guardian linked successfully');
+      setLinkParentStudent(null);
+      setLinkGuardianName('');
+      setLinkGuardianPhone('');
+      setLinkGuardianEmail('');
+      setLinkGuardianPassword('');
+      loadStudents(pagination.page);
+    } catch (err: any) {
+      alert(err.message || 'Failed to link parent/guardian');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleOpenViewGuardians = async (st: any) => {
+    try {
+      const details = await api.getStudent(st.id);
+      setViewGuardiansStudent(details);
+    } catch (err: any) {
+      alert(err.message || 'Failed to fetch student guardians');
+    }
+  };
+
+  const handleOpenEditGuardian = (g: any) => {
+    setEditGuardian(g);
+    setEditGName(g.full_name || '');
+    setEditGPhone(g.phone || '');
+    setEditGEmail(g.email || '');
+    setEditGRel(g.relationship || g.relationship_type || 'FATHER');
+  };
+
+  const handleUpdateGuardian = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editGuardian) return;
+    setSubmitting(true);
+    try {
+      await api.updateGuardian(editGuardian.id, {
+        fullName: editGName,
+        phone: editGPhone,
+        email: editGEmail,
+        relationship: editGRel,
+      });
+      alert('Parent / Guardian details updated successfully.');
+      setEditGuardian(null);
+      if (viewGuardiansStudent) {
+        handleOpenViewGuardians(viewGuardiansStudent.student);
+      }
+    } catch (err: any) {
+      alert(err.message || 'Failed to update parent details');
     } finally {
       setSubmitting(false);
     }
@@ -98,7 +251,7 @@ export const StudentsManagementView: React.FC = () => {
             <span>Student & Transit Enrollment</span>
           </h1>
           <p className="text-xs text-slate-500 mt-0.5">
-            Total {pagination.total || 0} registered students with assigned routes and cryptographic badges
+            Total {pagination.total || 0} registered students with assigned routes, parent logins, and cryptographic badges
           </p>
         </div>
 
@@ -209,10 +362,27 @@ export const StudentsManagementView: React.FC = () => {
                         <span className="text-[11px] text-slate-400 italic">Self / Walker</span>
                       )}
                     </td>
-                    <td className="px-6 py-4 text-right">
+                    <td className="px-6 py-4 text-right space-x-1.5">
+                      <button
+                        onClick={() => handleOpenEditStudent(st)}
+                        className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition cursor-pointer"
+                        title="Edit Student Record"
+                      >
+                        <Edit2 className="w-3.5 h-3.5" />
+                      </button>
+
+                      <button
+                        onClick={() => handleOpenViewGuardians(st)}
+                        className="inline-flex items-center space-x-1 px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold transition cursor-pointer"
+                        title="View & Edit Linked Parent Details"
+                      >
+                        <UserCheck className="w-3.5 h-3.5 text-indigo-600" />
+                        <span>Parents</span>
+                      </button>
+
                       <button
                         onClick={() => setBadgeStudentId(st.id)}
-                        className="inline-flex items-center space-x-1 px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg text-xs font-semibold transition cursor-pointer"
+                        className="inline-flex items-center space-x-1 px-2.5 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg text-xs font-semibold transition cursor-pointer"
                         title="Print or export student cryptographic QR transit badge"
                       >
                         <QrCode className="w-3.5 h-3.5" />
@@ -236,14 +406,14 @@ export const StudentsManagementView: React.FC = () => {
               <button
                 disabled={pagination.page <= 1}
                 onClick={() => loadStudents(pagination.page - 1)}
-                className="p-1 rounded border border-slate-300 disabled:opacity-40"
+                className="p-1 rounded border border-slate-300 disabled:opacity-40 cursor-pointer"
               >
                 <ChevronLeft className="w-4 h-4" />
               </button>
               <button
                 disabled={pagination.page >= pagination.totalPages}
                 onClick={() => loadStudents(pagination.page + 1)}
-                className="p-1 rounded border border-slate-300 disabled:opacity-40"
+                className="p-1 rounded border border-slate-300 disabled:opacity-40 cursor-pointer"
               >
                 <ChevronRight className="w-4 h-4" />
               </button>
@@ -263,8 +433,8 @@ export const StudentsManagementView: React.FC = () => {
 
       {/* Register Student Modal */}
       {createModalOpen && (
-        <div className="fixed inset-0 z-[2000] flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4">
-          <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full p-6 border border-slate-100">
+        <div className="fixed inset-0 z-[2000] flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 overflow-y-auto">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full p-6 border border-slate-100 my-8">
             <h3 className="font-bold text-slate-800 text-base mb-1">Register New Student</h3>
             <p className="text-xs text-slate-500 mb-4">
               Enrolls student into school database and automatically generates cryptographic transit credential
@@ -362,6 +532,87 @@ export const StudentsManagementView: React.FC = () => {
                 </select>
               </div>
 
+              {/* Parent Registration Toggle Section */}
+              <div className="pt-2 border-t border-slate-200 mt-2">
+                <label className="flex items-center space-x-2 text-xs font-semibold text-indigo-900 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={includeParent}
+                    onChange={(e) => setIncludeParent(e.target.checked)}
+                    className="rounded text-indigo-600 focus:ring-indigo-500 w-4 h-4"
+                  />
+                  <span>Register & Link Parent / Guardian Now</span>
+                </label>
+
+                {includeParent && (
+                  <div className="mt-3 p-3 bg-indigo-50/60 rounded-xl border border-indigo-100 space-y-3">
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 mb-1">Parent Full Name *</label>
+                        <input
+                          type="text"
+                          required={includeParent}
+                          placeholder="e.g. Rajesh Malhotra"
+                          value={parentName}
+                          onChange={(e) => setParentName(e.target.value)}
+                          className="w-full px-3 py-1.5 bg-white border border-slate-300 rounded-lg text-xs text-slate-800"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 mb-1">Parent Phone *</label>
+                        <input
+                          type="tel"
+                          required={includeParent}
+                          placeholder="+91 98100 00000"
+                          value={parentPhone}
+                          onChange={(e) => setParentPhone(e.target.value)}
+                          className="w-full px-3 py-1.5 bg-white border border-slate-300 rounded-lg text-xs text-slate-800 font-mono"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 mb-1">Relationship</label>
+                        <select
+                          value={parentRelationship}
+                          onChange={(e) => setParentRelationship(e.target.value)}
+                          className="w-full px-3 py-1.5 bg-white border border-slate-300 rounded-lg text-xs text-slate-800"
+                        >
+                          <option value="FATHER">Father</option>
+                          <option value="MOTHER">Mother</option>
+                          <option value="GUARDIAN">Guardian</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 mb-1">Parent Email (For Portal)</label>
+                        <input
+                          type="email"
+                          placeholder="parent@example.com"
+                          value={parentEmail}
+                          onChange={(e) => setParentEmail(e.target.value)}
+                          className="w-full px-3 py-1.5 bg-white border border-slate-300 rounded-lg text-xs text-slate-800"
+                        />
+                      </div>
+                    </div>
+
+                    {parentEmail && (
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 mb-1">Parent Portal Password</label>
+                        <input
+                          type="password"
+                          placeholder="Set initial password (min 6 chars)"
+                          value={parentPassword}
+                          onChange={(e) => setParentPassword(e.target.value)}
+                          className="w-full px-3 py-1.5 bg-white border border-slate-300 rounded-lg text-xs text-slate-800"
+                        />
+                        <span className="text-[10px] text-indigo-600 block mt-0.5">Allows parent to sign in to live transit tracking portal.</span>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
               <div className="flex gap-2 pt-3">
                 <button
                   type="submit"
@@ -373,6 +624,380 @@ export const StudentsManagementView: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setCreateModalOpen(false)}
+                  className="px-4 py-2 border border-slate-300 hover:bg-slate-50 text-slate-700 rounded-xl text-xs font-semibold transition cursor-pointer"
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Student Modal */}
+      {editStudentModal && (
+        <div className="fixed inset-0 z-[2000] flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full p-6 border border-slate-100">
+            <h3 className="font-bold text-slate-800 text-base mb-1">Edit Student Record</h3>
+            <p className="text-xs text-slate-500 mb-4">
+              Editing record for admission <strong className="font-mono text-slate-700">{editStudentModal.admission_number}</strong>
+            </p>
+
+            <form onSubmit={handleUpdateStudent} className="space-y-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Full Student Name *</label>
+                <input
+                  type="text"
+                  required
+                  value={editFullName}
+                  onChange={(e) => setEditFullName(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs text-slate-800"
+                />
+              </div>
+
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Class / Grade *</label>
+                  <select
+                    value={editGrade}
+                    onChange={(e) => setEditGrade(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs text-slate-800"
+                  >
+                    {['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12'].map((g) => (
+                      <option key={g} value={g}>{g}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Section *</label>
+                  <input
+                    type="text"
+                    required
+                    value={editSection}
+                    onChange={(e) => setEditSection(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs text-slate-800 uppercase"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Blood Group</label>
+                  <select
+                    value={editBloodGroup}
+                    onChange={(e) => setEditBloodGroup(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs text-slate-800"
+                  >
+                    {['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'].map((bg) => (
+                      <option key={bg} value={bg}>{bg}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Emergency Phone *</label>
+                  <input
+                    type="tel"
+                    required
+                    value={editEmergencyPhone}
+                    onChange={(e) => setEditEmergencyPhone(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs text-slate-800 font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Status</label>
+                  <select
+                    value={editStatus}
+                    onChange={(e) => setEditStatus(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs text-slate-800"
+                  >
+                    <option value="ACTIVE">ACTIVE</option>
+                    <option value="ALUMNI">ALUMNI</option>
+                    <option value="WITHDRAWN">WITHDRAWN</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Assign Bus Route</label>
+                <select
+                  value={editRouteId}
+                  onChange={(e) => setEditRouteId(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs text-slate-800"
+                >
+                  <option value="">-- No Bus Route Assigned --</option>
+                  {routes.map((r) => (
+                    <option key={r.id} value={r.id}>
+                      {r.route_code} - {r.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Home Address</label>
+                <input
+                  type="text"
+                  value={editHomeAddress}
+                  onChange={(e) => setEditHomeAddress(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs text-slate-800"
+                />
+              </div>
+
+              <div className="flex gap-2 pt-3">
+                <button
+                  type="submit"
+                  disabled={submitting}
+                  className="flex-1 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold transition cursor-pointer"
+                >
+                  {submitting ? 'Saving...' : 'Save Changes'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setEditStudentModal(null)}
+                  className="px-4 py-2 border border-slate-300 hover:bg-slate-50 text-slate-700 rounded-xl text-xs font-semibold transition cursor-pointer"
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* View & Edit Student Guardians Modal */}
+      {viewGuardiansStudent && (
+        <div className="fixed inset-0 z-[2000] flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full p-6 border border-slate-100">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div>
+                <h3 className="font-bold text-slate-800 text-base">Parents & Guardians</h3>
+                <p className="text-xs text-slate-500">
+                  Linked parents for <strong>{viewGuardiansStudent.student?.full_name}</strong>
+                </p>
+              </div>
+              <button
+                onClick={() => setViewGuardiansStudent(null)}
+                className="text-slate-400 hover:text-slate-600 font-bold cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="py-4 space-y-3 max-h-80 overflow-y-auto">
+              {viewGuardiansStudent.guardians?.length === 0 ? (
+                <p className="text-xs text-slate-400 italic text-center py-4">No parent accounts linked to this student yet.</p>
+              ) : (
+                viewGuardiansStudent.guardians?.map((g: any) => (
+                  <div key={g.id} className="p-3 bg-slate-50 rounded-xl border border-slate-200 flex items-center justify-between">
+                    <div>
+                      <div className="font-bold text-xs text-slate-800 flex items-center space-x-2">
+                        <span>{g.full_name}</span>
+                        <span className="text-[10px] bg-indigo-100 text-indigo-700 font-semibold px-2 py-0.5 rounded">
+                          {g.relationship_type || g.relationship || 'PARENT'}
+                        </span>
+                      </div>
+                      <div className="text-[11px] text-slate-500 font-mono mt-0.5">
+                        {g.phone} {g.email ? `• ${g.email}` : ''}
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => handleOpenEditGuardian(g)}
+                      className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition cursor-pointer"
+                      title="Edit Parent Details"
+                    >
+                      <Edit2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <div className="flex gap-2 pt-2 border-t border-slate-100">
+              <button
+                onClick={() => {
+                  const student = viewGuardiansStudent.student;
+                  setViewGuardiansStudent(null);
+                  setLinkGuardianPhone(student?.emergency_phone || '');
+                  setLinkParentStudent(student);
+                }}
+                className="flex-1 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold transition cursor-pointer"
+              >
+                + Link New Parent
+              </button>
+              <button
+                type="button"
+                onClick={() => setViewGuardiansStudent(null)}
+                className="px-4 py-2 border border-slate-300 hover:bg-slate-50 text-slate-700 rounded-xl text-xs font-semibold transition cursor-pointer"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Guardian / Parent Details Modal */}
+      {editGuardian && (
+        <div className="fixed inset-0 z-[2100] flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 border border-slate-100">
+            <h3 className="font-bold text-slate-800 text-base mb-1">Edit Parent / Guardian</h3>
+            <p className="text-xs text-slate-500 mb-4">Editing details for {editGuardian.full_name}</p>
+
+            <form onSubmit={handleUpdateGuardian} className="space-y-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Parent Full Name *</label>
+                <input
+                  type="text"
+                  required
+                  value={editGName}
+                  onChange={(e) => setEditGName(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs text-slate-800"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Phone Number *</label>
+                  <input
+                    type="tel"
+                    required
+                    value={editGPhone}
+                    onChange={(e) => setEditGPhone(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs text-slate-800 font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Relationship</label>
+                  <select
+                    value={editGRel}
+                    onChange={(e) => setEditGRel(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs text-slate-800"
+                  >
+                    <option value="FATHER">Father</option>
+                    <option value="MOTHER">Mother</option>
+                    <option value="GUARDIAN">Guardian</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Email Address</label>
+                <input
+                  type="email"
+                  value={editGEmail}
+                  onChange={(e) => setEditGEmail(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs text-slate-800"
+                />
+              </div>
+
+              <div className="flex gap-2 pt-3">
+                <button
+                  type="submit"
+                  disabled={submitting}
+                  className="flex-1 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold transition cursor-pointer"
+                >
+                  {submitting ? 'Saving...' : 'Save Parent Details'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setEditGuardian(null)}
+                  className="px-4 py-2 border border-slate-300 hover:bg-slate-50 text-slate-700 rounded-xl text-xs font-semibold transition cursor-pointer"
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Link Parent / Guardian Modal */}
+      {linkParentStudent && (
+        <div className="fixed inset-0 z-[2000] flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 border border-slate-100">
+            <div className="flex items-center space-x-2 text-indigo-600 mb-1">
+              <UserCheck className="w-5 h-5" />
+              <h3 className="font-bold text-slate-800 text-base">Link Parent / Guardian</h3>
+            </div>
+            <p className="text-xs text-slate-500 mb-4">
+              Register or link a parent account to <strong className="text-slate-800">{linkParentStudent.full_name}</strong> (Adm: {linkParentStudent.admission_number})
+            </p>
+
+            <form onSubmit={handleLinkParent} className="space-y-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Parent Full Name *</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. Sunita Sharma"
+                  value={linkGuardianName}
+                  onChange={(e) => setLinkGuardianName(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs text-slate-800"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Phone Number *</label>
+                  <input
+                    type="tel"
+                    required
+                    placeholder="+91 98100 00000"
+                    value={linkGuardianPhone}
+                    onChange={(e) => setLinkGuardianPhone(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs text-slate-800 font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Relationship *</label>
+                  <select
+                    value={linkGuardianRel}
+                    onChange={(e) => setLinkGuardianRel(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs text-slate-800"
+                  >
+                    <option value="FATHER">Father</option>
+                    <option value="MOTHER">Mother</option>
+                    <option value="GUARDIAN">Guardian</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Parent Email (For App Login)</label>
+                <input
+                  type="email"
+                  placeholder="parent.login@example.com"
+                  value={linkGuardianEmail}
+                  onChange={(e) => setLinkGuardianEmail(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs text-slate-800"
+                />
+              </div>
+
+              {linkGuardianEmail && (
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Portal Initial Password</label>
+                  <input
+                    type="password"
+                    placeholder="Enter password for parent portal"
+                    value={linkGuardianPassword}
+                    onChange={(e) => setLinkGuardianPassword(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs text-slate-800"
+                  />
+                  <p className="text-[10px] text-slate-500 mt-0.5">Creates a PARENT account in the school system so they can track their child.</p>
+                </div>
+              )}
+
+              <div className="flex gap-2 pt-3">
+                <button
+                  type="submit"
+                  disabled={submitting}
+                  className="flex-1 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold transition cursor-pointer"
+                >
+                  {submitting ? 'Linking...' : 'Link Parent Account'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setLinkParentStudent(null)}
                   className="px-4 py-2 border border-slate-300 hover:bg-slate-50 text-slate-700 rounded-xl text-xs font-semibold transition cursor-pointer"
                 >
                   Cancel

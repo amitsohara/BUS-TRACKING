@@ -12,7 +12,10 @@ tripRoutes.get(
   authenticate,
   requireSchoolContext(['DRIVER', 'ATTENDANT', 'TRANSPORT_MANAGER', 'SCHOOL_ADMIN', 'PLATFORM_ADMIN']),
   (req: AuthRequest, res: Response) => {
-    const schoolId = req.schoolContext!.schoolId;
+    const schoolId = req.schoolContext?.schoolId;
+    if (!schoolId) {
+      return res.status(400).json({ success: false, error: 'NO_SCHOOL_CONTEXT', message: 'No active school tenant selected.' });
+    }
     const userId = req.user!.id;
 
     // Find driver record for this user

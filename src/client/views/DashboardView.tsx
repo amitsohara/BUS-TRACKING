@@ -51,6 +51,27 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
   const stats = data?.stats || {};
   const subscription = data?.subscription;
 
+  if (!school) {
+    return (
+      <div className="bg-white p-8 rounded-2xl border border-slate-200 shadow-xs text-center space-y-4 my-8 max-w-lg mx-auto">
+        <div className="w-12 h-12 rounded-full bg-amber-50 text-amber-600 flex items-center justify-center mx-auto">
+          <AlertTriangle className="w-6 h-6" />
+        </div>
+        <h2 className="text-lg font-bold text-slate-800">No School Selected or Active</h2>
+        <p className="text-xs text-slate-500">
+          Please select or register a school workspace in Schools Management to view operational dashboard metrics.
+        </p>
+        <button
+          onClick={() => onNavigate('SCHOOLS')}
+          className="inline-flex items-center space-x-2 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold shadow-xs transition cursor-pointer"
+        >
+          <span>Go to Schools Management</span>
+          <ArrowRight className="w-4 h-4" />
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       {/* School Header Banner */}

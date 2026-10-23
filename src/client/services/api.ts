@@ -267,6 +267,13 @@ class ApiService {
     return this.request<{ success: boolean; student: any; qrDataUrl: string; qrPayload: string; credential: any }>(`/students/${id}/qr-badge`);
   }
 
+  addStudentGuardian(studentId: string, payload: any) {
+    return this.request<{ success: boolean; message: string; guardianId: string }>(`/students/${studentId}/guardians`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
   revokeStudentQr(id: string, reason: string) {
     return this.request(`/students/${id}/revoke-qr`, {
       method: 'POST',
@@ -331,6 +338,20 @@ class ApiService {
   addRouteStop(routeId: string, payload: any) {
     return this.request(`/routes/${routeId}/stops`, {
       method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  updateRoute(id: string, payload: any) {
+    return this.request(`/routes/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  updateGuardian(guardianId: string, payload: any) {
+    return this.request(`/students/guardians/${guardianId}`, {
+      method: 'PUT',
       body: JSON.stringify(payload),
     });
   }

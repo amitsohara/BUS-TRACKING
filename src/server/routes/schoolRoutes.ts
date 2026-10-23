@@ -314,30 +314,75 @@ schoolRoutes.post('/', authenticate, (req: AuthRequest, res: Response) => {
 schoolRoutes.get(
   '/current',
   authenticate,
-  requireSchoolContext(),
   (req: AuthRequest, res: Response) => {
-    const schoolId = req.schoolContext!.schoolId;
+    let schoolId = (req.headers['x-school-id'] as string) || req.schoolContext?.schoolId;
+
+    if (!schoolId && req.user) {
+      if (req.user.systemRole === 'PLATFORM_ADMIN') {
+        const firstSchool = db.prepare("SELECT id FROM schools WHERE status = 'ACTIVE' ORDER BY created_at ASC LIMIT 1").get() as any;
+        if (firstSchool) schoolId = firstSchool.id;
+      } else {
+        const membership = db.prepare("SELECT school_id FROM school_memberships WHERE user_id = ? AND status = 'ACTIVE' LIMIT 1").get(req.user.id) as any;
+        if (membership) schoolId = membership.school_id;
+      }
+    }
+
+    if (!schoolId) {
+      return res.json({
+        success: true,
+        hasSchool: false,
+        school: null,
+        settings: {},
+        subscription: null,
+        stats: {
+          totalVehicles: 0,
+          totalDrivers: 0,
+          totalStudents: 0,
+          totalRoutes: 0,
+          activeTrips: 0,
+          todayCompletedTrips: 0,
+          todayAttendanceScans: 0,
+        },
+        message: 'No active school workspace selected. Please select or register a school.',
+      });
+    }
 
     const school = db.prepare('SELECT * FROM schools WHERE id = ?').get(schoolId) as any;
     if (!school) {
-      return res.status(404).json({ success: false, error: 'SCHOOL_NOT_FOUND' });
+      return res.json({
+        success: true,
+        hasSchool: false,
+        school: null,
+        settings: {},
+        subscription: null,
+        stats: {
+          totalVehicles: 0,
+          totalDrivers: 0,
+          totalStudents: 0,
+          totalRoutes: 0,
+          activeTrips: 0,
+          todayCompletedTrips: 0,
+          todayAttendanceScans: 0,
+        },
+      });
     }
 
     const settings = db.prepare('SELECT * FROM tenant_settings WHERE school_id = ?').get(schoolId) as any;
     const subscription = db.prepare('SELECT * FROM subscriptions WHERE school_id = ?').get(schoolId) as any;
 
     const stats = {
-      totalVehicles: (db.prepare("SELECT COUNT(*) as c FROM vehicles WHERE school_id = ? AND status != 'RETIRED'").get(schoolId) as any).c,
-      totalDrivers: (db.prepare("SELECT COUNT(*) as c FROM drivers WHERE school_id = ? AND status = 'ACTIVE'").get(schoolId) as any).c,
-      totalStudents: (db.prepare("SELECT COUNT(*) as c FROM students WHERE school_id = ? AND status = 'ACTIVE'").get(schoolId) as any).c,
-      totalRoutes: (db.prepare("SELECT COUNT(*) as c FROM routes WHERE school_id = ? AND is_active = 1").get(schoolId) as any).c,
-      activeTrips: (db.prepare("SELECT COUNT(*) as c FROM trips WHERE school_id = ? AND status = 'IN_PROGRESS'").get(schoolId) as any).c,
-      todayCompletedTrips: (db.prepare("SELECT COUNT(*) as c FROM trips WHERE school_id = ? AND status = 'COMPLETED' AND trip_date = date('now')").get(schoolId) as any).c,
-      todayAttendanceScans: (db.prepare("SELECT COUNT(*) as c FROM attendance_events WHERE school_id = ? AND date(scanned_at) = date('now')").get(schoolId) as any).c,
+      totalVehicles: (db.prepare("SELECT COUNT(*) as c FROM vehicles WHERE school_id = ? AND status != 'RETIRED'").get(schoolId) as any)?.c || 0,
+      totalDrivers: (db.prepare("SELECT COUNT(*) as c FROM drivers WHERE school_id = ? AND status = 'ACTIVE'").get(schoolId) as any)?.c || 0,
+      totalStudents: (db.prepare("SELECT COUNT(*) as c FROM students WHERE school_id = ? AND status = 'ACTIVE'").get(schoolId) as any)?.c || 0,
+      totalRoutes: (db.prepare("SELECT COUNT(*) as c FROM routes WHERE school_id = ? AND is_active = 1").get(schoolId) as any)?.c || 0,
+      activeTrips: (db.prepare("SELECT COUNT(*) as c FROM trips WHERE school_id = ? AND status = 'IN_PROGRESS'").get(schoolId) as any)?.c || 0,
+      todayCompletedTrips: (db.prepare("SELECT COUNT(*) as c FROM trips WHERE school_id = ? AND status = 'COMPLETED' AND trip_date = date('now')").get(schoolId) as any)?.c || 0,
+      todayAttendanceScans: (db.prepare("SELECT COUNT(*) as c FROM attendance_events WHERE school_id = ? AND date(scanned_at) = date('now')").get(schoolId) as any)?.c || 0,
     };
 
     return res.json({
       success: true,
+      hasSchool: true,
       school,
       settings: settings || {},
       subscription: subscription || { plan_name: 'PROFESSIONAL', status: 'ACTIVE', max_vehicles: 20, max_students: 1000 },
@@ -945,7 +990,10 @@ schoolRoutes.put(
   authenticate,
   requireSchoolContext(['SCHOOL_ADMIN', 'PLATFORM_ADMIN']),
   (req: AuthRequest, res: Response) => {
-    const schoolId = req.schoolContext!.schoolId;
+    const schoolId = req.schoolContext?.schoolId;
+    if (!schoolId) {
+      return res.status(400).json({ success: false, error: 'NO_SCHOOL_CONTEXT', message: 'No active school tenant selected.' });
+    }
     const {
       speedLimitKmh,
       geofenceBufferMeters,

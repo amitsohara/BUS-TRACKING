@@ -263,3 +263,73 @@ routeRoutes.post(
     }
   }
 );
+
+// PUT /api/v1/routes/:id - Update route details
+routeRoutes.put(
+  '/:id',
+  authenticate,
+  requireSchoolContext(['SCHOOL_ADMIN', 'TRANSPORT_MANAGER', 'PLATFORM_ADMIN']),
+  (req: AuthRequest, res: Response) => {
+    try {
+      const schoolId = req.schoolContext?.schoolId;
+      if (!schoolId) {
+        return res.status(400).json({ success: false, error: 'NO_SCHOOL_CONTEXT', message: 'No school tenant selected.' });
+      }
+
+      const routeId = req.params.id;
+      const existing = db.prepare('SELECT * FROM routes WHERE id = ? AND school_id = ?').get(routeId, schoolId);
+      if (!existing) {
+        return res.status(404).json({ success: false, error: 'ROUTE_NOT_FOUND' });
+      }
+
+      const {
+        routeCode,
+        name,
+        description,
+        morningStartTime,
+        eveningStartTime,
+        defaultVehicleId,
+        defaultDriverId,
+        isActive,
+      } = req.body;
+
+      db.prepare(`
+        UPDATE routes SET
+          route_code = COALESCE(?, route_code),
+          name = COALESCE(?, name),
+          description = COALESCE(?, description),
+          morning_start_time = COALESCE(?, morning_start_time),
+          evening_start_time = COALESCE(?, evening_start_time),
+          default_vehicle_id = COALESCE(?, default_vehicle_id),
+          default_driver_id = COALESCE(?, default_driver_id),
+          is_active = COALESCE(?, is_active),
+          updated_at = datetime('now')
+        WHERE id = ? AND school_id = ?
+      `).run(
+        routeCode ? String(routeCode).trim().toUpperCase() : null,
+        name ? String(name).trim() : null,
+        description ? String(description).trim() : null,
+        morningStartTime || null,
+        eveningStartTime || null,
+        defaultVehicleId || null,
+        defaultDriverId || null,
+        isActive !== undefined ? (isActive ? 1 : 0) : null,
+        routeId,
+        schoolId
+      );
+
+      logAudit({
+        schoolId,
+        userId: req.user?.id,
+        action: 'UPDATE_ROUTE',
+        entityType: 'ROUTE',
+        entityId: routeId,
+        newValues: req.body,
+      });
+
+      return res.json({ success: true, message: 'Route updated successfully' });
+    } catch (err: any) {
+      return formatSafeServerError(res, err, 'UPDATE_ROUTE');
+    }
+  }
+);

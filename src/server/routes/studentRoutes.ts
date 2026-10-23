@@ -2,7 +2,7 @@ import { Router, Response } from 'express';
 import crypto from 'crypto';
 import QRCode from 'qrcode';
 import { db } from '../db.ts';
-import { authenticate, requireSchoolContext, AuthRequest, logAudit, formatSafeServerError } from '../auth.ts';
+import { authenticate, requireSchoolContext, AuthRequest, logAudit, formatSafeServerError, hashPassword } from '../auth.ts';
 
 export const studentRoutes = Router();
 
@@ -175,6 +175,12 @@ studentRoutes.post(
         morningStopId,
         eveningRouteId,
         eveningStopId,
+        // Optional Parent/Guardian fields
+        parentName,
+        parentPhone,
+        parentEmail,
+        parentRelationship,
+        parentPassword,
       } = req.body;
 
       if (!admissionNumber || !fullName || !grade || !section || !emergencyPhone) {
@@ -256,6 +262,64 @@ studentRoutes.post(
           VALUES (?, ?, ?, ?, ?, date('now', '+1 year'), 0)
         `).run(`qr_${studentId}`, schoolId, studentId, tokenHash, tokenHint);
 
+        // Optional Parent/Guardian registration during student creation
+        if (parentName && parentPhone) {
+          const cleanPName = String(parentName).trim();
+          const cleanPPhone = String(parentPhone).trim();
+          const cleanPEmail = parentEmail ? String(parentEmail).trim().toLowerCase() : null;
+          const relType = parentRelationship ? String(parentRelationship).trim().toUpperCase() : 'PARENT';
+
+          let parentUserId: string | null = null;
+
+          if (cleanPEmail) {
+            const existingUser = db.prepare('SELECT id FROM users WHERE LOWER(email) = LOWER(?)').get(cleanPEmail) as any;
+            if (existingUser) {
+              parentUserId = existingUser.id;
+              // Ensure school membership exists
+              db.prepare(`
+                INSERT INTO school_memberships (id, user_id, school_id, role, status)
+                VALUES (?, ?, ?, 'PARENT', 'ACTIVE')
+                ON CONFLICT(user_id, school_id) DO UPDATE SET status = 'ACTIVE'
+              `).run(`mem_par_${parentUserId}_${schoolId}`, parentUserId, schoolId);
+            } else if (parentPassword && String(parentPassword).trim().length >= 6) {
+              parentUserId = `usr_par_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+              const hashedPw = await hashPassword(String(parentPassword).trim());
+
+              db.prepare(`
+                INSERT INTO users (id, email, password_hash, full_name, phone, system_role, is_active)
+                VALUES (?, ?, ?, ?, ?, 'USER', 1)
+              `).run(parentUserId, cleanPEmail, hashedPw, cleanPName, cleanPPhone);
+
+              db.prepare(`
+                INSERT INTO school_memberships (id, user_id, school_id, role, status)
+                VALUES (?, ?, ?, 'PARENT', 'ACTIVE')
+              `).run(`mem_${parentUserId}`, parentUserId, schoolId);
+            }
+          }
+
+          let guardianId = `gdn_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+
+          // Check if guardian already exists
+          const existingGuardian = db.prepare(`
+            SELECT id FROM guardians WHERE (user_id IS NOT NULL AND user_id = ?) OR (phone = ? AND full_name = ?)
+          `).get(parentUserId, cleanPPhone, cleanPName) as any;
+
+          if (existingGuardian) {
+            guardianId = existingGuardian.id;
+          } else {
+            db.prepare(`
+              INSERT INTO guardians (id, user_id, full_name, phone, email, relationship)
+              VALUES (?, ?, ?, ?, ?, ?)
+            `).run(guardianId, parentUserId, cleanPName, cleanPPhone, cleanPEmail, relType);
+          }
+
+          db.prepare(`
+            INSERT INTO student_guardians (id, student_id, guardian_id, is_primary, can_pickup, relationship_type)
+            VALUES (?, ?, ?, 1, 1, ?)
+            ON CONFLICT(student_id, guardian_id) DO UPDATE SET is_primary = 1
+          `).run(`sg_${studentId}_${guardianId}`, studentId, guardianId, relType);
+        }
+
         db.exec('COMMIT;');
 
         logAudit({
@@ -278,6 +342,138 @@ studentRoutes.post(
       }
     } catch (outerErr: any) {
       return formatSafeServerError(res, outerErr, 'CREATE_STUDENT_OUTER');
+    }
+  }
+);
+
+// POST /api/v1/students/:id/guardians - Register / Link parent or guardian to student
+studentRoutes.post(
+  '/:id/guardians',
+  authenticate,
+  requireSchoolContext(['SCHOOL_ADMIN', 'TRANSPORT_MANAGER', 'PLATFORM_ADMIN']),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const schoolId = req.schoolContext?.schoolId;
+      if (!schoolId) {
+        return res.status(400).json({ success: false, error: 'NO_SCHOOL_CONTEXT', message: 'No school tenant selected.' });
+      }
+
+      const studentId = req.params.id;
+      const student = db.prepare('SELECT id, full_name FROM students WHERE id = ? AND school_id = ?').get(studentId, schoolId) as any;
+      if (!student) {
+        return res.status(404).json({ success: false, error: 'STUDENT_NOT_FOUND', message: 'Student not found in active school.' });
+      }
+
+      const {
+        fullName,
+        phone,
+        email,
+        relationship,
+        password,
+        isPrimary = true,
+        canPickup = true,
+        occupation,
+        address,
+      } = req.body;
+
+      if (!fullName || !phone) {
+        return res.status(400).json({
+          success: false,
+          error: 'VALIDATION_ERROR',
+          message: 'Parent/Guardian full name and phone number are required.',
+        });
+      }
+
+      const cleanName = String(fullName).trim();
+      const cleanPhone = String(phone).trim();
+      const cleanEmail = email ? String(email).trim().toLowerCase() : null;
+      const relType = relationship ? String(relationship).trim().toUpperCase() : 'PARENT';
+
+      db.exec('BEGIN TRANSACTION;');
+      try {
+        let parentUserId: string | null = null;
+
+        if (cleanEmail) {
+          const existingUser = db.prepare('SELECT id FROM users WHERE LOWER(email) = LOWER(?)').get(cleanEmail) as any;
+          if (existingUser) {
+            parentUserId = existingUser.id;
+            // Ensure school membership exists
+            db.prepare(`
+              INSERT INTO school_memberships (id, user_id, school_id, role, status)
+              VALUES (?, ?, ?, 'PARENT', 'ACTIVE')
+              ON CONFLICT(user_id, school_id) DO UPDATE SET status = 'ACTIVE'
+            `).run(`mem_par_${parentUserId}_${schoolId}`, parentUserId, schoolId);
+          } else if (password && String(password).trim().length >= 6) {
+            parentUserId = `usr_par_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+            const hashedPw = await hashPassword(String(password).trim());
+
+            db.prepare(`
+              INSERT INTO users (id, email, password_hash, full_name, phone, system_role, is_active)
+              VALUES (?, ?, ?, ?, ?, 'USER', 1)
+            `).run(parentUserId, cleanEmail, hashedPw, cleanName, cleanPhone);
+
+            db.prepare(`
+              INSERT INTO school_memberships (id, user_id, school_id, role, status)
+              VALUES (?, ?, ?, 'PARENT', 'ACTIVE')
+            `).run(`mem_${parentUserId}`, parentUserId, schoolId);
+          }
+        }
+
+        let guardianId = `gdn_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+
+        const existingGuardian = db.prepare(`
+          SELECT id FROM guardians WHERE (user_id IS NOT NULL AND user_id = ?) OR (phone = ? AND full_name = ?)
+        `).get(parentUserId, cleanPhone, cleanName) as any;
+
+        if (existingGuardian) {
+          guardianId = existingGuardian.id;
+        } else {
+          db.prepare(`
+            INSERT INTO guardians (id, user_id, full_name, phone, email, relationship, occupation, address)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          `).run(
+            guardianId,
+            parentUserId,
+            cleanName,
+            cleanPhone,
+            cleanEmail,
+            relType,
+            occupation ? String(occupation).trim() : null,
+            address ? String(address).trim() : null
+          );
+        }
+
+        db.prepare(`
+          INSERT INTO student_guardians (id, student_id, guardian_id, is_primary, can_pickup, relationship_type)
+          VALUES (?, ?, ?, ?, ?, ?)
+          ON CONFLICT(student_id, guardian_id) DO UPDATE SET
+            is_primary = excluded.is_primary,
+            can_pickup = excluded.can_pickup,
+            relationship_type = excluded.relationship_type
+        `).run(`sg_${studentId}_${guardianId}`, studentId, guardianId, isPrimary ? 1 : 0, canPickup ? 1 : 0, relType);
+
+        db.exec('COMMIT;');
+
+        logAudit({
+          schoolId,
+          userId: req.user?.id,
+          action: 'ADD_STUDENT_GUARDIAN',
+          entityType: 'STUDENT',
+          entityId: studentId,
+          newValues: { guardianId, fullName: cleanName, relationship: relType },
+        });
+
+        return res.status(201).json({
+          success: true,
+          message: `Parent / Guardian "${cleanName}" linked successfully to student ${student.full_name}.`,
+          guardianId,
+        });
+      } catch (err: any) {
+        try { db.exec('ROLLBACK;'); } catch (_) {}
+        return formatSafeServerError(res, err, 'ADD_STUDENT_GUARDIAN');
+      }
+    } catch (outerErr: any) {
+      return formatSafeServerError(res, outerErr, 'ADD_STUDENT_GUARDIAN_OUTER');
     }
   }
 );
@@ -509,6 +705,61 @@ studentRoutes.post(
       return res.json({ success: true, message: 'QR credential revoked. Please issue a new badge.' });
     } catch (err: any) {
       return formatSafeServerError(res, err, 'REVOKE_STUDENT_QR');
+    }
+  }
+);
+
+// PUT /api/v1/students/guardians/:guardianId - Edit guardian details
+studentRoutes.put(
+  '/guardians/:guardianId',
+  authenticate,
+  requireSchoolContext(['SCHOOL_ADMIN', 'TRANSPORT_MANAGER', 'PLATFORM_ADMIN']),
+  (req: AuthRequest, res: Response) => {
+    try {
+      const schoolId = req.schoolContext?.schoolId;
+      if (!schoolId) {
+        return res.status(400).json({ success: false, error: 'NO_SCHOOL_CONTEXT', message: 'No active school tenant selected.' });
+      }
+
+      const guardianId = req.params.guardianId;
+      const existing = db.prepare('SELECT * FROM guardians WHERE id = ?').get(guardianId) as any;
+      if (!existing) {
+        return res.status(404).json({ success: false, error: 'GUARDIAN_NOT_FOUND' });
+      }
+
+      const { fullName, phone, email, relationship, occupation, address } = req.body;
+
+      db.prepare(`
+        UPDATE guardians SET
+          full_name = COALESCE(?, full_name),
+          phone = COALESCE(?, phone),
+          email = COALESCE(?, email),
+          relationship = COALESCE(?, relationship),
+          occupation = COALESCE(?, occupation),
+          address = COALESCE(?, address)
+        WHERE id = ?
+      `).run(
+        fullName ? String(fullName).trim() : null,
+        phone ? String(phone).trim() : null,
+        email ? String(email).trim().toLowerCase() : null,
+        relationship ? String(relationship).trim().toUpperCase() : null,
+        occupation ? String(occupation).trim() : null,
+        address ? String(address).trim() : null,
+        guardianId
+      );
+
+      logAudit({
+        schoolId,
+        userId: req.user?.id,
+        action: 'UPDATE_GUARDIAN',
+        entityType: 'GUARDIAN',
+        entityId: guardianId,
+        newValues: req.body,
+      });
+
+      return res.json({ success: true, message: 'Parent / Guardian details updated successfully' });
+    } catch (err: any) {
+      return formatSafeServerError(res, err, 'UPDATE_GUARDIAN');
     }
   }
 );

@@ -1,13 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { api } from '../services/api.ts';
-import { UserCheck, Plus, Phone, Award, ShieldAlert } from 'lucide-react';
+import { UserCheck, Plus, Phone, Award, ShieldAlert, Edit2 } from 'lucide-react';
 
 export const DriversManagementView: React.FC = () => {
   const [drivers, setDrivers] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [createModalOpen, setCreateModalOpen] = useState(false);
+  const [editDriver, setEditDriver] = useState<any | null>(null);
 
-  // Form State
+  // New Driver Form State
   const [fullName, setFullName] = useState('');
   const [phone, setPhone] = useState('');
   const [licenseNumber, setLicenseNumber] = useState('');
@@ -18,6 +19,16 @@ export const DriversManagementView: React.FC = () => {
   const [email, setEmail] = useState('');
   const [loginPassword, setLoginPassword] = useState('Driver@12345');
   const [submitting, setSubmitting] = useState(false);
+
+  // Edit Driver Form State
+  const [editFullName, setEditFullName] = useState('');
+  const [editPhone, setEditPhone] = useState('');
+  const [editLicenseNumber, setEditLicenseNumber] = useState('');
+  const [editLicenseExpiry, setEditLicenseExpiry] = useState('');
+  const [editEmergencyContact, setEditEmergencyContact] = useState('');
+  const [editBloodGroup, setEditBloodGroup] = useState('B+');
+  const [editYearsExperience, setEditYearsExperience] = useState('5');
+  const [editStatus, setEditStatus] = useState('ACTIVE');
 
   useEffect(() => {
     loadDrivers();
@@ -63,6 +74,43 @@ export const DriversManagementView: React.FC = () => {
     }
   };
 
+  const handleOpenEdit = (d: any) => {
+    setEditDriver(d);
+    setEditFullName(d.full_name || '');
+    setEditPhone(d.phone || '');
+    setEditLicenseNumber(d.license_number || '');
+    setEditLicenseExpiry(d.license_expiry || '');
+    setEditEmergencyContact(d.emergency_contact || '');
+    setEditBloodGroup(d.blood_group || 'B+');
+    setEditYearsExperience(String(d.years_experience || 0));
+    setEditStatus(d.status || 'ACTIVE');
+  };
+
+  const handleUpdateDriver = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editDriver) return;
+    setSubmitting(true);
+    try {
+      await api.updateDriver(editDriver.id, {
+        fullName: editFullName,
+        phone: editPhone,
+        licenseNumber: editLicenseNumber,
+        licenseExpiry: editLicenseExpiry,
+        emergencyContact: editEmergencyContact,
+        bloodGroup: editBloodGroup,
+        yearsExperience: parseInt(editYearsExperience, 10),
+        status: editStatus,
+      });
+      alert('Driver details updated successfully.');
+      setEditDriver(null);
+      loadDrivers();
+    } catch (err: any) {
+      alert(err.message || 'Failed to update driver');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -97,11 +145,20 @@ export const DriversManagementView: React.FC = () => {
                 <div className="w-10 h-10 rounded-full bg-indigo-50 text-indigo-700 flex items-center justify-center font-bold text-sm">
                   {d.full_name.charAt(0)}
                 </div>
-                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                  d.status === 'ACTIVE' ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-200 text-slate-600'
-                }`}>
-                  {d.status}
-                </span>
+                <div className="flex items-center space-x-2">
+                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                    d.status === 'ACTIVE' ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-200 text-slate-600'
+                  }`}>
+                    {d.status}
+                  </span>
+                  <button
+                    onClick={() => handleOpenEdit(d)}
+                    className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition cursor-pointer"
+                    title="Edit Driver Details"
+                  >
+                    <Edit2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
               </div>
 
               <div>
@@ -241,6 +298,104 @@ export const DriversManagementView: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setCreateModalOpen(false)}
+                  className="px-4 py-2 border border-slate-300 hover:bg-slate-50 text-slate-700 rounded-xl text-xs font-semibold transition cursor-pointer"
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Driver Modal */}
+      {editDriver && (
+        <div className="fixed inset-0 z-[2000] flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full p-6 border border-slate-100">
+            <h3 className="font-bold text-slate-800 text-base mb-1">Edit Driver Profile</h3>
+            <p className="text-xs text-slate-500 mb-4">Editing details for {editDriver.full_name}</p>
+
+            <form onSubmit={handleUpdateDriver} className="space-y-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Full Name *</label>
+                <input
+                  type="text"
+                  required
+                  value={editFullName}
+                  onChange={(e) => setEditFullName(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Phone Number *</label>
+                  <input
+                    type="tel"
+                    required
+                    value={editPhone}
+                    onChange={(e) => setEditPhone(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Driving License No *</label>
+                  <input
+                    type="text"
+                    required
+                    value={editLicenseNumber}
+                    onChange={(e) => setEditLicenseNumber(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-mono uppercase"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">License Expiry *</label>
+                  <input
+                    type="date"
+                    required
+                    value={editLicenseExpiry}
+                    onChange={(e) => setEditLicenseExpiry(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Years Exp</label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={editYearsExperience}
+                    onChange={(e) => setEditYearsExperience(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Status</label>
+                  <select
+                    value={editStatus}
+                    onChange={(e) => setEditStatus(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs"
+                  >
+                    <option value="ACTIVE">ACTIVE</option>
+                    <option value="ON_LEAVE">ON_LEAVE</option>
+                    <option value="TERMINATED">TERMINATED</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="flex gap-2 pt-3">
+                <button
+                  type="submit"
+                  disabled={submitting}
+                  className="flex-1 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold transition cursor-pointer"
+                >
+                  {submitting ? 'Saving...' : 'Save Driver Changes'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setEditDriver(null)}
                   className="px-4 py-2 border border-slate-300 hover:bg-slate-50 text-slate-700 rounded-xl text-xs font-semibold transition cursor-pointer"
                 >
                   Cancel

@@ -198,15 +198,16 @@ export function requireSchoolContext(allowedRoles?: string[]) {
       return res.status(401).json({ success: false, error: 'UNAUTHORIZED' });
     }
 
-    // Platform Admins can bypass school-specific checks if explicitly requesting global or targeting a school
     const requestedSchoolId =
       (req.headers['x-school-id'] as string) ||
       (req.params.schoolId as string) ||
       (req.query.schoolId as string) ||
       (req.body && req.body.schoolId);
 
+    // 1. If explicit school context already in token, initialize
+    let targetSchoolId = requestedSchoolId || (req.schoolContext && req.schoolContext.schoolId);
+
     if (req.user.systemRole === 'PLATFORM_ADMIN') {
-      let targetSchoolId = requestedSchoolId;
       if (!targetSchoolId) {
         // Auto-select first active school as context if none specified
         const firstSchool = db
@@ -228,65 +229,53 @@ export function requireSchoolContext(allowedRoles?: string[]) {
             schoolName: schoolRow.name,
             schoolCode: schoolRow.code,
           };
-          return next();
         }
       }
-      // If platform admin without specific school header and zero schools exist
-      if (!allowedRoles || allowedRoles.includes('PLATFORM_ADMIN')) {
-        return next();
-      }
-    }
-
-    // Normal tenant isolation validation:
-    // User must have an active membership in the target school
-    let targetSchoolId = requestedSchoolId || (req.schoolContext && req.schoolContext.schoolId);
-
-    if (!targetSchoolId) {
-      // Find the user's primary/first active school membership
-      const membership = db
-        .prepare(`
-          SELECT sm.school_id, sm.role, s.name as school_name, s.code as school_code
-          FROM school_memberships sm
-          JOIN schools s ON sm.school_id = s.id
-          WHERE sm.user_id = ? AND sm.status = 'ACTIVE' AND s.status = 'ACTIVE'
-          LIMIT 1
-        `)
-        .get(req.user.id) as any;
-
-      if (!membership) {
-        return res.status(403).json({
-          success: false,
-          error: 'NO_ACTIVE_SCHOOL_MEMBERSHIP',
-          message: 'User does not belong to any active school tenant.',
-        });
-      }
-      targetSchoolId = membership.school_id;
-      req.schoolContext = {
-        schoolId: membership.school_id,
-        role: membership.role,
-        schoolName: membership.school_name,
-        schoolCode: membership.school_code,
-      };
     } else {
-      // Explicit targetSchoolId provided: verify membership rigorously in SQLite
-      const membership = db
-        .prepare(`
-          SELECT sm.school_id, sm.role, s.name as school_name, s.code as school_code
-          FROM school_memberships sm
-          JOIN schools s ON sm.school_id = s.id
-          WHERE sm.user_id = ? AND sm.school_id = ? AND sm.status = 'ACTIVE' AND s.status = 'ACTIVE'
-        `)
-        .get(req.user.id, targetSchoolId) as any;
+      // Normal user tenant isolation validation
+      if (!targetSchoolId) {
+        const membership = db
+          .prepare(`
+            SELECT sm.school_id, sm.role, s.name as school_name, s.code as school_code
+            FROM school_memberships sm
+            JOIN schools s ON sm.school_id = s.id
+            WHERE sm.user_id = ? AND sm.status = 'ACTIVE' AND s.status = 'ACTIVE'
+            LIMIT 1
+          `)
+          .get(req.user.id) as any;
 
-      if (!membership && req.user.systemRole !== 'PLATFORM_ADMIN') {
-        return res.status(403).json({
-          success: false,
-          error: 'TENANT_ACCESS_DENIED',
-          message: 'Access denied: You are not authorized to view or modify records for this school.',
-        });
-      }
+        if (!membership) {
+          return res.status(403).json({
+            success: false,
+            error: 'NO_ACTIVE_SCHOOL_MEMBERSHIP',
+            message: 'User does not belong to any active school tenant.',
+          });
+        }
+        targetSchoolId = membership.school_id;
+        req.schoolContext = {
+          schoolId: membership.school_id,
+          role: membership.role,
+          schoolName: membership.school_name,
+          schoolCode: membership.school_code,
+        };
+      } else {
+        const membership = db
+          .prepare(`
+            SELECT sm.school_id, sm.role, s.name as school_name, s.code as school_code
+            FROM school_memberships sm
+            JOIN schools s ON sm.school_id = s.id
+            WHERE sm.user_id = ? AND sm.school_id = ? AND sm.status = 'ACTIVE' AND s.status = 'ACTIVE'
+          `)
+          .get(req.user.id, targetSchoolId) as any;
 
-      if (membership) {
+        if (!membership) {
+          return res.status(403).json({
+            success: false,
+            error: 'TENANT_ACCESS_DENIED',
+            message: 'Access denied: You are not authorized to view or modify records for this school.',
+          });
+        }
+
         req.schoolContext = {
           schoolId: membership.school_id,
           role: membership.role,
@@ -310,6 +299,15 @@ export function requireSchoolContext(allowedRoles?: string[]) {
           message: `Action requires one of the following roles: ${allowedRoles.join(', ')}`,
         });
       }
+    }
+
+    // Final safety verification: Ensure schoolContext is populated
+    if (!req.schoolContext?.schoolId) {
+      return res.status(400).json({
+        success: false,
+        error: 'NO_SCHOOL_CONTEXT',
+        message: 'No active school tenant selected. Please register or select a school first.',
+      });
     }
 
     next();

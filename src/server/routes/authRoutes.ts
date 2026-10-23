@@ -88,6 +88,29 @@ authRoutes.post('/login', async (req: AuthRequest, res: Response) => {
 
   // Choose default school if exists
   const primaryMembership = memberships[0];
+  let primarySchool = primaryMembership
+    ? {
+        schoolId: primaryMembership.school_id,
+        schoolName: primaryMembership.school_name,
+        schoolCode: primaryMembership.school_code,
+        role: primaryMembership.role,
+      }
+    : null;
+
+  if (!primarySchool && user.system_role === 'PLATFORM_ADMIN') {
+    const firstSchool = db
+      .prepare("SELECT id, name, code FROM schools WHERE status = 'ACTIVE' ORDER BY created_at ASC LIMIT 1")
+      .get() as any;
+    if (firstSchool) {
+      primarySchool = {
+        schoolId: firstSchool.id,
+        schoolName: firstSchool.name,
+        schoolCode: firstSchool.code,
+        role: 'SCHOOL_ADMIN',
+      };
+    }
+  }
+
   const token = generateToken(
     {
       id: user.id,
@@ -95,12 +118,12 @@ authRoutes.post('/login', async (req: AuthRequest, res: Response) => {
       fullName: user.full_name,
       systemRole: user.system_role,
     },
-    primaryMembership?.school_id,
-    primaryMembership?.role
+    primarySchool?.schoolId,
+    primarySchool?.role
   );
 
   logAudit({
-    schoolId: primaryMembership?.school_id,
+    schoolId: primarySchool?.schoolId,
     userId: user.id,
     action: 'LOGIN_SUCCESS',
     entityType: 'USER',
@@ -119,14 +142,7 @@ authRoutes.post('/login', async (req: AuthRequest, res: Response) => {
       phone: user.phone,
       systemRole: user.system_role,
     },
-    activeSchool: primaryMembership
-      ? {
-          schoolId: primaryMembership.school_id,
-          schoolName: primaryMembership.school_name,
-          schoolCode: primaryMembership.school_code,
-          role: primaryMembership.role,
-        }
-      : null,
+    activeSchool: primarySchool,
     memberships,
   });
 });
@@ -352,6 +368,27 @@ authRoutes.get('/me', authenticate, (req: AuthRequest, res: Response) => {
     `)
     .all(user.id) as any[];
 
+  let activeSchool = req.schoolContext || (memberships[0] ? {
+    schoolId: memberships[0].school_id,
+    schoolName: memberships[0].school_name,
+    schoolCode: memberships[0].school_code,
+    role: memberships[0].role,
+  } : null);
+
+  if (!activeSchool && user.system_role === 'PLATFORM_ADMIN') {
+    const firstSchool = db
+      .prepare("SELECT id, name, code FROM schools WHERE status = 'ACTIVE' ORDER BY created_at ASC LIMIT 1")
+      .get() as any;
+    if (firstSchool) {
+      activeSchool = {
+        schoolId: firstSchool.id,
+        schoolName: firstSchool.name,
+        schoolCode: firstSchool.code,
+        role: 'SCHOOL_ADMIN',
+      };
+    }
+  }
+
   return res.json({
     success: true,
     user: {
@@ -361,12 +398,7 @@ authRoutes.get('/me', authenticate, (req: AuthRequest, res: Response) => {
       phone: user.phone,
       systemRole: user.system_role,
     },
-    activeSchool: req.schoolContext || (memberships[0] ? {
-      schoolId: memberships[0].school_id,
-      schoolName: memberships[0].school_name,
-      schoolCode: memberships[0].school_code,
-      role: memberships[0].role,
-    } : null),
+    activeSchool,
     memberships,
   });
 });
