@@ -25,12 +25,14 @@ export const ParentPortalView: React.FC = () => {
 
   // Verification Request Modal State
   const [requestModalOpen, setRequestModalOpen] = useState(false);
+  const [availableSchools, setAvailableSchools] = useState<any[]>([]);
   const [reqSchoolCode, setReqSchoolCode] = useState('');
   const [reqStudentAdmNo, setReqStudentAdmNo] = useState('');
   const [reqStudentName, setReqStudentName] = useState('');
   const [reqParentName, setReqParentName] = useState('');
   const [reqRelationship, setReqRelationship] = useState('FATHER');
   const [submittingReq, setSubmittingReq] = useState(false);
+  const [reqError, setReqError] = useState<string | null>(null);
 
   useEffect(() => {
     loadParentData();
@@ -39,14 +41,16 @@ export const ParentPortalView: React.FC = () => {
   const loadParentData = async () => {
     setLoading(true);
     try {
-      const [kidsRes, notifsRes, reqsRes] = await Promise.all([
+      const [kidsRes, notifsRes, reqsRes, schoolsRes] = await Promise.all([
         api.getParentChildren(),
         api.getParentNotifications(),
         api.getParentVerificationRequests().catch(() => ({ requests: [] })),
+        api.getActiveSchools().catch(() => ({ schools: [] })),
       ]);
       setChildren(kidsRes.children || []);
       setNotifications(notifsRes.notifications || []);
       setVerificationRequests(reqsRes.requests || []);
+      setAvailableSchools(schoolsRes.schools || []);
 
       // If active trip exists, subscribe to live WebSocket stream
       const activeChild = kidsRes.children?.[0];
@@ -76,13 +80,22 @@ export const ParentPortalView: React.FC = () => {
 
   const handleSubmitRequest = async (e: React.FormEvent) => {
     e.preventDefault();
+    setReqError(null);
+    if (!reqSchoolCode.trim()) {
+      setReqError('Please select or enter a valid School Code.');
+      return;
+    }
+    if (!reqStudentAdmNo.trim()) {
+      setReqError('Please enter Student Admission Number.');
+      return;
+    }
     setSubmittingReq(true);
     try {
       const res = await api.requestSchoolVerification({
-        schoolCode: reqSchoolCode,
-        studentAdmissionNumber: reqStudentAdmNo,
-        studentName: reqStudentName,
-        parentName: reqParentName,
+        schoolCode: reqSchoolCode.trim(),
+        studentAdmissionNumber: reqStudentAdmNo.trim(),
+        studentName: reqStudentName.trim(),
+        parentName: reqParentName.trim(),
         relationship: reqRelationship,
       });
       alert(res.message || 'Verification request submitted to school administration.');
@@ -91,9 +104,10 @@ export const ParentPortalView: React.FC = () => {
       setReqStudentAdmNo('');
       setReqStudentName('');
       setReqParentName('');
+      setReqError(null);
       loadParentData();
     } catch (err: any) {
-      alert(err.message || 'Failed to submit verification request');
+      setReqError(err.message || 'Failed to submit verification request. Please check details and try again.');
     } finally {
       setSubmittingReq(false);
     }
@@ -447,7 +461,36 @@ export const ParentPortalView: React.FC = () => {
               Submit your student's admission number and school code to request live transit tracking authorization from school administration.
             </p>
 
+            {reqError && (
+              <div className="mb-4 p-3 bg-rose-50 border border-rose-200 text-rose-800 text-xs rounded-xl flex items-start space-x-2">
+                <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-rose-600" />
+                <span>{reqError}</span>
+              </div>
+            )}
+
             <form onSubmit={handleSubmitRequest} className="space-y-3">
+              {availableSchools.length > 0 && (
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Select Active School</label>
+                  <select
+                    onChange={(e) => {
+                      if (e.target.value) {
+                        setReqSchoolCode(e.target.value);
+                      }
+                    }}
+                    value={reqSchoolCode}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs text-slate-800"
+                  >
+                    <option value="">-- Choose School from System List --</option>
+                    {availableSchools.map((s) => (
+                      <option key={s.id} value={s.code}>
+                        {s.name} ({s.code}) - {s.city}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">School Code *</label>
                 <input
@@ -519,7 +562,10 @@ export const ParentPortalView: React.FC = () => {
                 </button>
                 <button
                   type="button"
-                  onClick={() => setRequestModalOpen(false)}
+                  onClick={() => {
+                    setRequestModalOpen(false);
+                    setReqError(null);
+                  }}
                   className="px-4 py-2 border border-slate-300 hover:bg-slate-50 text-slate-700 rounded-xl text-xs font-semibold transition cursor-pointer"
                 >
                   Cancel

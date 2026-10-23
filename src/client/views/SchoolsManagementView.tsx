@@ -53,7 +53,11 @@ interface SchoolItem {
   subscription_status?: string;
 }
 
-export const SchoolsManagementView: React.FC = () => {
+interface SchoolsManagementViewProps {
+  onSwitchSchool?: (schoolId: string) => void;
+}
+
+export const SchoolsManagementView: React.FC<SchoolsManagementViewProps> = ({ onSwitchSchool }) => {
   const [schools, setSchools] = useState<SchoolItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -208,7 +212,7 @@ export const SchoolsManagementView: React.FC = () => {
       const res = await api.createSchool(createForm);
       if (res.success) {
         setCreateModalOpen(false);
-        setSuccessMessage(`School "${createForm.name}" created successfully.`);
+        setSuccessMessage(`School "${createForm.name}" created successfully. Workspace context updated.`);
         if (res.initialInvitation) {
           setLastGeneratedInvite({
             email: res.initialInvitation.email,
@@ -216,6 +220,10 @@ export const SchoolsManagementView: React.FC = () => {
             inviteUrl: `${window.location.origin}/?token=${res.initialInvitation.token}`,
             deliveryStatus: res.initialInvitation.deliveryStatus,
           });
+        }
+        // Switch to newly created school if onSwitchSchool provided
+        if (res.school && res.school.id && onSwitchSchool) {
+          onSwitchSchool(res.school.id);
         }
         // Reset form
         setCreateForm({
@@ -656,6 +664,16 @@ export const SchoolsManagementView: React.FC = () => {
 
                     {/* Actions */}
                     <td className="py-3.5 px-4 text-right space-x-2 shrink-0">
+                      {onSwitchSchool && (
+                        <button
+                          onClick={() => onSwitchSchool(school.id)}
+                          className="px-2.5 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-900 font-bold rounded-lg text-xs transition cursor-pointer inline-flex items-center space-x-1"
+                          title="Switch active workspace to this school"
+                        >
+                          <Building2 className="w-3.5 h-3.5 text-amber-600" />
+                          <span>Switch Workspace</span>
+                        </button>
+                      )}
                       <button
                         onClick={() => handleOpenDetails(school.id)}
                         className="px-2.5 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-semibold rounded-lg text-xs transition cursor-pointer"

@@ -202,6 +202,14 @@ parentRoutes.get('/children/:studentId/attendance', authenticate, (req: AuthRequ
   return res.json({ success: true, studentId, count: events.length, attendance: events });
 });
 
+// GET /api/v1/parents/active-schools - Get active schools for parent verification lookup
+parentRoutes.get('/active-schools', authenticate, (req: AuthRequest, res: Response) => {
+  const schools = db
+    .prepare("SELECT id, name, code, city, state FROM schools WHERE status = 'ACTIVE' ORDER BY name ASC")
+    .all();
+  return res.json({ success: true, schools });
+});
+
 // POST /api/v1/parents/request-school-verification - Parent requests link/verification with a school
 parentRoutes.post('/request-school-verification', authenticate, (req: AuthRequest, res: Response) => {
   const userId = req.user!.id;
@@ -216,7 +224,7 @@ parentRoutes.post('/request-school-verification', authenticate, (req: AuthReques
   }
 
   // Find target school
-  const school = db.prepare('SELECT id, name, code FROM schools WHERE LOWER(code) = LOWER(?) AND status = "ACTIVE"').get(schoolCode.trim()) as any;
+  const school = db.prepare("SELECT id, name, code FROM schools WHERE LOWER(code) = LOWER(?) AND status = 'ACTIVE'").get(schoolCode.trim()) as any;
   if (!school) {
     return res.status(404).json({
       success: false,

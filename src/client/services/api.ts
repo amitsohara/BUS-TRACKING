@@ -475,6 +475,10 @@ class ApiService {
     });
   }
 
+  getActiveSchools() {
+    return this.request<{ success: boolean; schools: Array<{ id: string; name: string; code: string; city: string; state: string }> }>('/parents/active-schools');
+  }
+
   requestSchoolVerification(payload: { schoolCode: string; studentAdmissionNumber: string; studentName?: string; parentName?: string; relationship?: string }) {
     return this.request<{ success: boolean; message: string; requestId: string; schoolName: string }>('/parents/request-school-verification', {
       method: 'POST',

@@ -156,7 +156,7 @@ export default function App() {
 
         <main className="flex-1 p-4 sm:p-6 lg:p-8 min-w-0 overflow-y-auto">
           {currentView === 'DASHBOARD' && <DashboardView onNavigate={(v) => setCurrentView(v)} />}
-          {currentView === 'SCHOOLS' && <SchoolsManagementView />}
+          {currentView === 'SCHOOLS' && <SchoolsManagementView onSwitchSchool={handleSwitchSchool} />}
           {currentView === 'DRIVER_CONSOLE' && <DriverConsoleView />}
           {currentView === 'PARENT_PORTAL' && <ParentPortalView />}
           {currentView === 'TRIPS' && <TripsMonitorView onNavigateToConsole={() => setCurrentView('DRIVER_CONSOLE')} />}

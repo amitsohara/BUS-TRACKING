@@ -237,6 +237,14 @@ schoolRoutes.post('/', authenticate, (req: AuthRequest, res: Response) => {
       VALUES (?, ?, 'PROFESSIONAL', 'ACTIVE', 30, 1500, date('now', '+1 year'))
     `).run(`sub_${schoolId}`, schoolId);
 
+    // 3.5. Ensure active membership for creating platform admin
+    if (req.user?.id) {
+      db.prepare(`
+        INSERT INTO school_memberships (id, user_id, school_id, role, status)
+        VALUES (?, ?, ?, 'SCHOOL_ADMIN', 'ACTIVE')
+      `).run(`mem_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`, req.user.id, schoolId);
+    }
+
     let initialInvitation = null;
     // 4. Optional initial admin invitation if email provided
     if (initialAdminEmail && initialAdminName) {

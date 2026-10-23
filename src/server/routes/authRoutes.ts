@@ -77,15 +77,32 @@ authRoutes.post('/login', async (req: AuthRequest, res: Response) => {
     });
   }
 
-  // Fetch school memberships for this user
-  const memberships = db
-    .prepare(`
+  // Fetch school memberships for this user (PLATFORM_ADMIN gets access to all active schools)
+  let memberships: any[] = [];
+  if (user.system_role === 'PLATFORM_ADMIN') {
+    memberships = db.prepare(`
+      SELECT 
+        COALESCE(sm.id, 'mem_plat_' || s.id) as membership_id,
+        s.id as school_id,
+        COALESCE(sm.role, 'SCHOOL_ADMIN') as role,
+        s.name as school_name,
+        s.code as school_code,
+        s.city,
+        s.status as school_status
+      FROM schools s
+      LEFT JOIN school_memberships sm ON s.id = sm.school_id AND sm.user_id = ? AND sm.status = 'ACTIVE'
+      WHERE s.status = 'ACTIVE'
+      ORDER BY s.created_at ASC
+    `).all(user.id) as any[];
+  } else {
+    memberships = db.prepare(`
       SELECT sm.id as membership_id, sm.school_id, sm.role, s.name as school_name, s.code as school_code, s.city, s.status as school_status
       FROM school_memberships sm
       JOIN schools s ON sm.school_id = s.id
       WHERE sm.user_id = ? AND sm.status = 'ACTIVE' AND s.status = 'ACTIVE'
-    `)
-    .all(user.id) as any[];
+      ORDER BY s.name ASC
+    `).all(user.id) as any[];
+  }
 
   // Choose default school if exists
   const primaryMembership = memberships[0];
@@ -311,6 +328,11 @@ authRoutes.post('/switch-context', authenticate, (req: AuthRequest, res: Respons
     return res.status(400).json({ success: false, error: 'schoolId is required' });
   }
 
+  const targetSchool = db.prepare('SELECT id, name, code, status FROM schools WHERE id = ?').get(schoolId) as any;
+  if (!targetSchool || targetSchool.status !== 'ACTIVE') {
+    return res.status(404).json({ success: false, error: 'SCHOOL_NOT_FOUND', message: 'Target school not found or inactive.' });
+  }
+
   const membership = db
     .prepare(`
       SELECT sm.role, s.id as school_id, s.name as school_name, s.code as school_code
@@ -329,8 +351,8 @@ authRoutes.post('/switch-context', authenticate, (req: AuthRequest, res: Respons
   }
 
   const role = membership ? membership.role : 'SCHOOL_ADMIN';
-  const schoolName = membership ? membership.school_name : 'Platform Management';
-  const schoolCode = membership ? membership.school_code : 'PLATFORM';
+  const schoolName = targetSchool.name;
+  const schoolCode = targetSchool.code;
 
   const newToken = generateToken(req.user!, schoolId, role);
 
@@ -338,7 +360,7 @@ authRoutes.post('/switch-context', authenticate, (req: AuthRequest, res: Respons
     success: true,
     token: newToken,
     activeSchool: {
-      schoolId,
+      schoolId: targetSchool.id,
       schoolName,
       schoolCode,
       role,
@@ -356,14 +378,31 @@ authRoutes.get('/me', authenticate, (req: AuthRequest, res: Response) => {
     return res.status(404).json({ success: false, error: 'USER_NOT_FOUND' });
   }
 
-  const memberships = db
-    .prepare(`
+  let memberships: any[] = [];
+  if (user.system_role === 'PLATFORM_ADMIN') {
+    memberships = db.prepare(`
+      SELECT 
+        COALESCE(sm.id, 'mem_plat_' || s.id) as membership_id,
+        s.id as school_id,
+        COALESCE(sm.role, 'SCHOOL_ADMIN') as role,
+        s.name as school_name,
+        s.code as school_code,
+        s.city,
+        s.status as school_status
+      FROM schools s
+      LEFT JOIN school_memberships sm ON s.id = sm.school_id AND sm.user_id = ? AND sm.status = 'ACTIVE'
+      WHERE s.status = 'ACTIVE'
+      ORDER BY s.created_at ASC
+    `).all(user.id) as any[];
+  } else {
+    memberships = db.prepare(`
       SELECT sm.id as membership_id, sm.school_id, sm.role, s.name as school_name, s.code as school_code, s.status as school_status
       FROM school_memberships sm
       JOIN schools s ON sm.school_id = s.id
-      WHERE sm.user_id = ? AND sm.status = 'ACTIVE'
-    `)
-    .all(user.id) as any[];
+      WHERE sm.user_id = ? AND sm.status = 'ACTIVE' AND s.status = 'ACTIVE'
+      ORDER BY s.name ASC
+    `).all(user.id) as any[];
+  }
 
   let activeSchool = req.schoolContext || (memberships[0] ? {
     schoolId: memberships[0].school_id,
