@@ -354,12 +354,33 @@ export function runMigrations() {
       updated_at TEXT DEFAULT CURRENT_TIMESTAMP
     );
 
+    -- 22. Parent Verification Requests (School Verification Workflow)
+    CREATE TABLE IF NOT EXISTS parent_verification_requests (
+      id TEXT PRIMARY KEY,
+      school_id TEXT NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      parent_name TEXT NOT NULL,
+      parent_phone TEXT NOT NULL,
+      parent_email TEXT,
+      student_admission_number TEXT NOT NULL,
+      student_name TEXT,
+      relationship_type TEXT DEFAULT 'PARENT',
+      status TEXT DEFAULT 'PENDING', -- PENDING, APPROVED, REJECTED
+      rejection_reason TEXT,
+      reviewed_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+      reviewed_at TEXT,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+
     -- Indexes for High-Performance Multi-Tenant Lookups & Realtime Queries
     CREATE INDEX IF NOT EXISTS idx_memberships_user ON school_memberships(user_id);
     CREATE INDEX IF NOT EXISTS idx_memberships_school ON school_memberships(school_id);
     CREATE INDEX IF NOT EXISTS idx_invitations_token_hash ON school_invitations(token_hash);
     CREATE INDEX IF NOT EXISTS idx_invitations_school_status ON school_invitations(school_id, status);
     CREATE INDEX IF NOT EXISTS idx_invitations_email ON school_invitations(email);
+    CREATE INDEX IF NOT EXISTS idx_parent_requests_school_status ON parent_verification_requests(school_id, status);
+    CREATE INDEX IF NOT EXISTS idx_parent_requests_user ON parent_verification_requests(user_id);
     CREATE INDEX IF NOT EXISTS idx_students_school ON students(school_id);
     CREATE INDEX IF NOT EXISTS idx_vehicles_school ON vehicles(school_id);
     CREATE INDEX IF NOT EXISTS idx_drivers_school ON drivers(school_id);
@@ -433,6 +454,32 @@ export function runMigrations() {
     }
   } catch (err) {
     // Already provisioned or error handled
+  }
+
+  // Ensure at least one primary school tenant exists so tenant context is never empty
+  try {
+    const schoolCount = db.prepare('SELECT COUNT(*) as count FROM schools').get() as { count: number };
+    if (schoolCount.count === 0) {
+      const defaultSchoolId = 'sch_dps_rkp';
+      db.prepare(`
+        INSERT INTO schools (id, code, name, affiliation_number, board, address, city, state, pincode, contact_phone, contact_email, timezone, status)
+        VALUES (?, 'DPS-RKP', 'Delhi Public School, R.K. Puram', 'CBSE/AFF/2730015', 'CBSE', 'Sector XII, R.K. Puram', 'New Delhi', 'Delhi', '110022', '+91 11 4911 5555', 'transport@dpsrkp.net', 'Asia/Kolkata', 'ACTIVE')
+      `).run(defaultSchoolId);
+
+      db.prepare(`
+        INSERT INTO tenant_settings (school_id, speed_limit_kmh, geofence_buffer_meters, allow_manual_attendance, strict_reconciliation_required)
+        VALUES (?, 45, 50, 1, 1)
+      `).run(defaultSchoolId);
+
+      db.prepare(`
+        INSERT INTO subscriptions (id, school_id, plan_name, status, max_vehicles, max_students, expires_at)
+        VALUES (?, ?, 'ENTERPRISE', 'ACTIVE', 50, 3000, '2028-12-31')
+      `).run(`sub_${defaultSchoolId}`, defaultSchoolId);
+
+      console.log('[Database] Empty school database detected: Created primary school tenant (Delhi Public School, R.K. Puram / DPS-RKP).');
+    }
+  } catch (err) {
+    // Already provisioned
   }
 
   console.log('[Database] Schema migrations executed successfully.');

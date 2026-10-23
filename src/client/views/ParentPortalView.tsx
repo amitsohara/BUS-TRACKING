@@ -18,9 +18,19 @@ import {
 export const ParentPortalView: React.FC = () => {
   const [children, setChildren] = useState<any[]>([]);
   const [notifications, setNotifications] = useState<any[]>([]);
+  const [verificationRequests, setVerificationRequests] = useState<any[]>([]);
   const [selectedChildIndex, setSelectedChildIndex] = useState(0);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+
+  // Verification Request Modal State
+  const [requestModalOpen, setRequestModalOpen] = useState(false);
+  const [reqSchoolCode, setReqSchoolCode] = useState('');
+  const [reqStudentAdmNo, setReqStudentAdmNo] = useState('');
+  const [reqStudentName, setReqStudentName] = useState('');
+  const [reqParentName, setReqParentName] = useState('');
+  const [reqRelationship, setReqRelationship] = useState('FATHER');
+  const [submittingReq, setSubmittingReq] = useState(false);
 
   useEffect(() => {
     loadParentData();
@@ -29,12 +39,14 @@ export const ParentPortalView: React.FC = () => {
   const loadParentData = async () => {
     setLoading(true);
     try {
-      const [kidsRes, notifsRes] = await Promise.all([
+      const [kidsRes, notifsRes, reqsRes] = await Promise.all([
         api.getParentChildren(),
         api.getParentNotifications(),
+        api.getParentVerificationRequests().catch(() => ({ requests: [] })),
       ]);
       setChildren(kidsRes.children || []);
       setNotifications(notifsRes.notifications || []);
+      setVerificationRequests(reqsRes.requests || []);
 
       // If active trip exists, subscribe to live WebSocket stream
       const activeChild = kidsRes.children?.[0];
@@ -51,10 +63,39 @@ export const ParentPortalView: React.FC = () => {
   const handleManualRefresh = async () => {
     setRefreshing(true);
     try {
-      const kidsRes = await api.getParentChildren();
+      const [kidsRes, reqsRes] = await Promise.all([
+        api.getParentChildren(),
+        api.getParentVerificationRequests().catch(() => ({ requests: [] })),
+      ]);
       setChildren(kidsRes.children || []);
+      setVerificationRequests(reqsRes.requests || []);
     } finally {
       setRefreshing(false);
+    }
+  };
+
+  const handleSubmitRequest = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSubmittingReq(true);
+    try {
+      const res = await api.requestSchoolVerification({
+        schoolCode: reqSchoolCode,
+        studentAdmissionNumber: reqStudentAdmNo,
+        studentName: reqStudentName,
+        parentName: reqParentName,
+        relationship: reqRelationship,
+      });
+      alert(res.message || 'Verification request submitted to school administration.');
+      setRequestModalOpen(false);
+      setReqSchoolCode('');
+      setReqStudentAdmNo('');
+      setReqStudentName('');
+      setReqParentName('');
+      loadParentData();
+    } catch (err: any) {
+      alert(err.message || 'Failed to submit verification request');
+    } finally {
+      setSubmittingReq(false);
     }
   };
 
@@ -100,26 +141,80 @@ export const ParentPortalView: React.FC = () => {
             </p>
           </div>
 
-          {/* Child Selector Tabs */}
-          {children.length > 1 && (
-            <div className="flex gap-2">
-              {children.map((c, idx) => (
-                <button
-                  key={c.id}
-                  onClick={() => setSelectedChildIndex(idx)}
-                  className={`px-4 py-2 rounded-xl text-xs font-semibold transition cursor-pointer ${
-                    selectedChildIndex === idx
-                      ? 'bg-white text-indigo-900 shadow-md'
-                      : 'bg-white/10 hover:bg-white/20 text-white'
-                  }`}
-                >
-                  {c.full_name}
-                </button>
-              ))}
-            </div>
-          )}
+          <div className="flex items-center space-x-3">
+            {/* Request Link to School Button */}
+            <button
+              onClick={() => setRequestModalOpen(true)}
+              className="px-4 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-xl text-xs shadow-md transition cursor-pointer flex items-center space-x-1.5"
+            >
+              <Users className="w-4 h-4" />
+              <span>+ Register / Link Student</span>
+            </button>
+
+            {/* Child Selector Tabs */}
+            {children.length > 1 && (
+              <div className="flex gap-2">
+                {children.map((c, idx) => (
+                  <button
+                    key={c.id}
+                    onClick={() => setSelectedChildIndex(idx)}
+                    className={`px-4 py-2 rounded-xl text-xs font-semibold transition cursor-pointer ${
+                      selectedChildIndex === idx
+                        ? 'bg-white text-indigo-900 shadow-md'
+                        : 'bg-white/10 hover:bg-white/20 text-white'
+                    }`}
+                  >
+                    {c.full_name}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       </div>
+
+      {/* Verification Status Banners */}
+      {verificationRequests.length > 0 && (
+        <div className="space-y-3">
+          {verificationRequests.map((req) => (
+            <div
+              key={req.id}
+              className={`p-4 rounded-xl border flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs ${
+                req.status === 'PENDING'
+                  ? 'bg-amber-50 border-amber-200 text-amber-900'
+                  : req.status === 'APPROVED'
+                  ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
+                  : 'bg-rose-50 border-rose-200 text-rose-900'
+              }`}
+            >
+              <div className="flex items-start space-x-2">
+                <AlertCircle className={`w-4 h-4 shrink-0 mt-0.5 ${
+                  req.status === 'PENDING' ? 'text-amber-600' : req.status === 'APPROVED' ? 'text-emerald-600' : 'text-rose-600'
+                }`} />
+                <div>
+                  <span className="font-bold">
+                    School Verification Request ({req.school_name} - Adm: {req.student_admission_number}):
+                  </span>{' '}
+                  {req.status === 'PENDING' && (
+                    <span>Pending school administrator verification and approval. Live tracking will activate automatically once approved.</span>
+                  )}
+                  {req.status === 'APPROVED' && (
+                    <span>Approved! Your account is linked to {req.school_name}.</span>
+                  )}
+                  {req.status === 'REJECTED' && (
+                    <span>Declined/Cancelled by school office. {req.rejection_reason ? `Reason: ${req.rejection_reason}` : ''}</span>
+                  )}
+                </div>
+              </div>
+              <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold uppercase shrink-0 ${
+                req.status === 'PENDING' ? 'bg-amber-200 text-amber-900' : req.status === 'APPROVED' ? 'bg-emerald-200 text-emerald-900' : 'bg-rose-200 text-rose-900'
+              }`}>
+                {req.status}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
 
       {loading ? (
         <div className="py-24 text-center text-slate-500 flex flex-col items-center">
@@ -336,6 +431,101 @@ export const ParentPortalView: React.FC = () => {
                 </div>
               )}
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Request School Verification Modal */}
+      {requestModalOpen && (
+        <div className="fixed inset-0 z-[2000] flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 border border-slate-100">
+            <div className="flex items-center space-x-2 text-indigo-600 mb-1">
+              <Users className="w-5 h-5" />
+              <h3 className="font-bold text-slate-800 text-base">Request School Verification</h3>
+            </div>
+            <p className="text-xs text-slate-500 mb-4">
+              Submit your student's admission number and school code to request live transit tracking authorization from school administration.
+            </p>
+
+            <form onSubmit={handleSubmitRequest} className="space-y-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">School Code *</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. DPS-RKP or RYAN-VK"
+                  value={reqSchoolCode}
+                  onChange={(e) => setReqSchoolCode(e.target.value.toUpperCase())}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs text-slate-800 uppercase font-mono"
+                />
+                <span className="text-[10px] text-slate-400 mt-0.5 block">Unique school identifier code provided by your school office.</span>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Student Admission Number *</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. DPS-2022-0412"
+                  value={reqStudentAdmNo}
+                  onChange={(e) => setReqStudentAdmNo(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs text-slate-800 font-mono"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Student Full Name</label>
+                <input
+                  type="text"
+                  placeholder="e.g. Aarav Sharma"
+                  value={reqStudentName}
+                  onChange={(e) => setReqStudentName(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs text-slate-800"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Parent Full Name</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Amit Sharma"
+                    value={reqParentName}
+                    onChange={(e) => setReqParentName(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs text-slate-800"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Relationship</label>
+                  <select
+                    value={reqRelationship}
+                    onChange={(e) => setReqRelationship(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs text-slate-800"
+                  >
+                    <option value="FATHER">Father</option>
+                    <option value="MOTHER">Mother</option>
+                    <option value="GUARDIAN">Guardian</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="flex gap-2 pt-3">
+                <button
+                  type="submit"
+                  disabled={submittingReq}
+                  className="flex-1 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold transition cursor-pointer"
+                >
+                  {submittingReq ? 'Submitting...' : 'Submit Request'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setRequestModalOpen(false)}
+                  className="px-4 py-2 border border-slate-300 hover:bg-slate-50 text-slate-700 rounded-xl text-xs font-semibold transition cursor-pointer"
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

@@ -76,8 +76,14 @@ export const StudentsManagementView: React.FC = () => {
 
   const [submitting, setSubmitting] = useState(false);
 
+  // Pending Verifications State
+  const [activeTab, setActiveTab] = useState<'ROSTER' | 'PENDING_VERIFICATIONS'>('ROSTER');
+  const [pendingRequests, setPendingRequests] = useState<any[]>([]);
+  const [loadingPending, setLoadingPending] = useState(false);
+
   useEffect(() => {
     loadStudents(1);
+    loadPendingRequests();
     api.getRoutes().then((res) => setRoutes(res.routes || [])).catch(console.error);
   }, []);
 
@@ -241,6 +247,44 @@ export const StudentsManagementView: React.FC = () => {
     }
   };
 
+  const loadPendingRequests = async () => {
+    setLoadingPending(true);
+    try {
+      const res = await api.getPendingVerifications();
+      setPendingRequests(res.requests || []);
+    } catch (err) {
+      console.error('Failed to load pending verifications:', err);
+    } finally {
+      setLoadingPending(false);
+    }
+  };
+
+  const handleApproveRequest = async (requestId: string) => {
+    if (!confirm('Approve this parent verification request and link them to the student?')) return;
+    try {
+      const res = await api.approveVerificationRequest(requestId);
+      alert(res.message || 'Parent verification approved successfully.');
+      loadPendingRequests();
+      loadStudents(pagination.page);
+    } catch (err: any) {
+      alert(err.message || 'Failed to approve verification request.');
+    }
+  };
+
+  const handleCancelRequest = async (requestId: string) => {
+    const reason = prompt('Enter reason for cancelling/rejecting this parent registration request:', 'Admission details could not be verified by school office');
+    if (reason === null) return;
+    try {
+      const res = await api.cancelVerificationRequest(requestId, reason);
+      alert(res.message || 'Verification request cancelled.');
+      loadPendingRequests();
+    } catch (err: any) {
+      alert(err.message || 'Failed to cancel verification request.');
+    }
+  };
+
+  const pendingCount = pendingRequests.filter((r) => r.status === 'PENDING').length;
+
   return (
     <div className="space-y-6">
       {/* Header and Controls */}
@@ -248,180 +292,319 @@ export const StudentsManagementView: React.FC = () => {
         <div>
           <h1 className="text-xl font-bold text-slate-900 flex items-center space-x-2">
             <Users className="w-5 h-5 text-indigo-600" />
-            <span>Student & Transit Enrollment</span>
+            <span>Student & Parent Verification Management</span>
           </h1>
           <p className="text-xs text-slate-500 mt-0.5">
-            Total {pagination.total || 0} registered students with assigned routes, parent logins, and cryptographic badges
+            Total {pagination.total || 0} registered students and parent verification requests
           </p>
         </div>
 
-        <button
-          onClick={() => setCreateModalOpen(true)}
-          className="inline-flex items-center space-x-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold shadow-xs transition cursor-pointer"
-        >
-          <Plus className="w-4 h-4" />
-          <span>Register Student</span>
-        </button>
-      </div>
-
-      {/* Filter and Search Bar */}
-      <form onSubmit={handleSearchSubmit} className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs flex flex-col sm:flex-row gap-3">
-        <div className="flex-1 relative">
-          <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
-          <input
-            type="text"
-            placeholder="Search by student name, admission number, or emergency phone..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
-          />
-        </div>
-
         <div className="flex items-center space-x-2">
-          <select
-            value={grade}
-            onChange={(e) => setGrade(e.target.value)}
-            className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-medium text-slate-700 focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
-          >
-            <option value="">All Grades</option>
-            {['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12'].map((g) => (
-              <option key={g} value={g}>Class {g}</option>
-            ))}
-          </select>
+          {/* Tab Switcher */}
+          <div className="bg-slate-100 p-1 rounded-xl flex items-center text-xs font-semibold">
+            <button
+              onClick={() => setActiveTab('ROSTER')}
+              className={`px-3 py-1.5 rounded-lg transition cursor-pointer ${
+                activeTab === 'ROSTER' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              Student Roster
+            </button>
+            <button
+              onClick={() => setActiveTab('PENDING_VERIFICATIONS')}
+              className={`px-3 py-1.5 rounded-lg transition flex items-center space-x-1.5 cursor-pointer ${
+                activeTab === 'PENDING_VERIFICATIONS' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <span>Pending Parent Verifications</span>
+              {pendingCount > 0 && (
+                <span className="bg-amber-500 text-white text-[10px] font-bold px-1.5 py-0.2 rounded-full animate-pulse">
+                  {pendingCount}
+                </span>
+              )}
+            </button>
+          </div>
 
           <button
-            type="submit"
-            className="px-4 py-2 bg-slate-800 hover:bg-slate-900 text-white rounded-lg text-xs font-semibold transition cursor-pointer"
+            onClick={() => setCreateModalOpen(true)}
+            className="inline-flex items-center space-x-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold shadow-xs transition cursor-pointer"
           >
-            Search
+            <Plus className="w-4 h-4" />
+            <span>Register Student</span>
           </button>
         </div>
-      </form>
-
-      {/* Students Table */}
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs">
-            <thead className="bg-slate-50 text-slate-600 font-bold border-b border-slate-200 uppercase tracking-wider">
-              <tr>
-                <th className="px-6 py-3.5">Student</th>
-                <th className="px-6 py-3.5">Admission No</th>
-                <th className="px-6 py-3.5">Class & Sec</th>
-                <th className="px-6 py-3.5">Emergency Contact</th>
-                <th className="px-6 py-3.5">Assigned Route & Stop</th>
-                <th className="px-6 py-3.5 text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {loading ? (
-                <tr>
-                  <td colSpan={6} className="py-12 text-center text-slate-400">Loading student roster...</td>
-                </tr>
-              ) : students.length === 0 ? (
-                <tr>
-                  <td colSpan={6} className="py-12 text-center text-slate-400">No student records found.</td>
-                </tr>
-              ) : (
-                students.map((st) => (
-                  <tr key={st.id} className="hover:bg-slate-50/80 transition">
-                    <td className="px-6 py-4">
-                      <div className="flex items-center space-x-3">
-                        <div className="w-8 h-8 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center font-bold text-xs shrink-0">
-                          {st.full_name.charAt(0)}
-                        </div>
-                        <div>
-                          <div className="font-bold text-slate-800">{st.full_name}</div>
-                          <span className="text-[10px] text-slate-400 font-mono">Blood: {st.blood_group || 'O+'}</span>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 font-mono font-semibold text-slate-700">
-                      {st.admission_number}
-                    </td>
-                    <td className="px-6 py-4">
-                      <span className="bg-slate-100 text-slate-700 px-2 py-0.5 rounded-md font-semibold text-[11px]">
-                        {st.grade} - {st.section}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4">
-                      <div className="flex items-center space-x-1 text-slate-600 font-mono text-[11px]">
-                        <Phone className="w-3.5 h-3.5 text-slate-400" />
-                        <span>{st.emergency_phone}</span>
-                      </div>
-                    </td>
-                    <td className="px-6 py-4">
-                      {st.morning_route_name ? (
-                        <div>
-                          <div className="font-semibold text-slate-800 flex items-center space-x-1">
-                            <Bus className="w-3 h-3 text-indigo-600" />
-                            <span>{st.morning_route_code}</span>
-                          </div>
-                          <span className="text-[11px] text-slate-500">{st.morning_stop_name || 'Designated Stop'}</span>
-                        </div>
-                      ) : (
-                        <span className="text-[11px] text-slate-400 italic">Self / Walker</span>
-                      )}
-                    </td>
-                    <td className="px-6 py-4 text-right space-x-1.5">
-                      <button
-                        onClick={() => handleOpenEditStudent(st)}
-                        className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition cursor-pointer"
-                        title="Edit Student Record"
-                      >
-                        <Edit2 className="w-3.5 h-3.5" />
-                      </button>
-
-                      <button
-                        onClick={() => handleOpenViewGuardians(st)}
-                        className="inline-flex items-center space-x-1 px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold transition cursor-pointer"
-                        title="View & Edit Linked Parent Details"
-                      >
-                        <UserCheck className="w-3.5 h-3.5 text-indigo-600" />
-                        <span>Parents</span>
-                      </button>
-
-                      <button
-                        onClick={() => setBadgeStudentId(st.id)}
-                        className="inline-flex items-center space-x-1 px-2.5 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg text-xs font-semibold transition cursor-pointer"
-                        title="Print or export student cryptographic QR transit badge"
-                      >
-                        <QrCode className="w-3.5 h-3.5" />
-                        <span>QR Pass</span>
-                      </button>
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-
-        {/* Pagination Footer */}
-        {pagination.totalPages > 1 && (
-          <div className="flex items-center justify-between px-6 py-3 border-t border-slate-200 bg-slate-50 text-xs text-slate-600">
-            <span>
-              Page {pagination.page} of {pagination.totalPages} ({pagination.total} total)
-            </span>
-            <div className="flex space-x-2">
-              <button
-                disabled={pagination.page <= 1}
-                onClick={() => loadStudents(pagination.page - 1)}
-                className="p-1 rounded border border-slate-300 disabled:opacity-40 cursor-pointer"
-              >
-                <ChevronLeft className="w-4 h-4" />
-              </button>
-              <button
-                disabled={pagination.page >= pagination.totalPages}
-                onClick={() => loadStudents(pagination.page + 1)}
-                className="p-1 rounded border border-slate-300 disabled:opacity-40 cursor-pointer"
-              >
-                <ChevronRight className="w-4 h-4" />
-              </button>
-            </div>
-          </div>
-        )}
       </div>
 
+      {/* Tab 1: Student Roster */}
+      {activeTab === 'ROSTER' ? (
+        <>
+          {/* Filter and Search Bar */}
+          <form onSubmit={handleSearchSubmit} className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs flex flex-col sm:flex-row gap-3">
+            <div className="flex-1 relative">
+              <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+              <input
+                type="text"
+                placeholder="Search by student name, admission number, or emergency phone..."
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
+              />
+            </div>
+
+            <div className="flex items-center space-x-2">
+              <select
+                value={grade}
+                onChange={(e) => setGrade(e.target.value)}
+                className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-medium text-slate-700 focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
+              >
+                <option value="">All Grades</option>
+                {['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12'].map((g) => (
+                  <option key={g} value={g}>Class {g}</option>
+                ))}
+              </select>
+
+              <button
+                type="submit"
+                className="px-4 py-2 bg-slate-800 hover:bg-slate-900 text-white rounded-lg text-xs font-semibold transition cursor-pointer"
+              >
+                Search
+              </button>
+            </div>
+          </form>
+
+          {/* Students Table */}
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-slate-50 text-slate-600 font-bold border-b border-slate-200 uppercase tracking-wider">
+                  <tr>
+                    <th className="px-6 py-3.5">Student</th>
+                    <th className="px-6 py-3.5">Admission No</th>
+                    <th className="px-6 py-3.5">Class & Sec</th>
+                    <th className="px-6 py-3.5">Emergency Contact</th>
+                    <th className="px-6 py-3.5">Assigned Route & Stop</th>
+                    <th className="px-6 py-3.5 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {loading ? (
+                    <tr>
+                      <td colSpan={6} className="py-12 text-center text-slate-400">Loading student roster...</td>
+                    </tr>
+                  ) : students.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} className="py-12 text-center text-slate-400">No student records found.</td>
+                    </tr>
+                  ) : (
+                    students.map((st) => (
+                      <tr key={st.id} className="hover:bg-slate-50/80 transition">
+                        <td className="px-6 py-4">
+                          <div className="flex items-center space-x-3">
+                            <div className="w-8 h-8 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center font-bold text-xs shrink-0">
+                              {st.full_name.charAt(0)}
+                            </div>
+                            <div>
+                              <div className="font-bold text-slate-800">{st.full_name}</div>
+                              <span className="text-[10px] text-slate-400 font-mono">Blood: {st.blood_group || 'O+'}</span>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="px-6 py-4 font-mono font-semibold text-slate-700">
+                          {st.admission_number}
+                        </td>
+                        <td className="px-6 py-4">
+                          <span className="bg-slate-100 text-slate-700 px-2 py-0.5 rounded-md font-semibold text-[11px]">
+                            {st.grade} - {st.section}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4">
+                          <div className="flex items-center space-x-1 text-slate-600 font-mono text-[11px]">
+                            <Phone className="w-3.5 h-3.5 text-slate-400" />
+                            <span>{st.emergency_phone}</span>
+                          </div>
+                        </td>
+                        <td className="px-6 py-4">
+                          {st.morning_route_name ? (
+                            <div>
+                              <div className="font-semibold text-slate-800 flex items-center space-x-1">
+                                <Bus className="w-3 h-3 text-indigo-600" />
+                                <span>{st.morning_route_code}</span>
+                              </div>
+                              <span className="text-[11px] text-slate-500">{st.morning_stop_name || 'Designated Stop'}</span>
+                            </div>
+                          ) : (
+                            <span className="text-[11px] text-slate-400 italic">Self / Walker</span>
+                          )}
+                        </td>
+                        <td className="px-6 py-4 text-right space-x-1.5">
+                          <button
+                            onClick={() => handleOpenEditStudent(st)}
+                            className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition cursor-pointer"
+                            title="Edit Student Record"
+                          >
+                            <Edit2 className="w-3.5 h-3.5" />
+                          </button>
+
+                          <button
+                            onClick={() => handleOpenViewGuardians(st)}
+                            className="inline-flex items-center space-x-1 px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold transition cursor-pointer"
+                            title="View & Edit Linked Parent Details"
+                          >
+                            <UserCheck className="w-3.5 h-3.5 text-indigo-600" />
+                            <span>Parents</span>
+                          </button>
+
+                          <button
+                            onClick={() => setBadgeStudentId(st.id)}
+                            className="inline-flex items-center space-x-1 px-2.5 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg text-xs font-semibold transition cursor-pointer"
+                            title="Print or export student cryptographic QR transit badge"
+                          >
+                            <QrCode className="w-3.5 h-3.5" />
+                            <span>QR Pass</span>
+                          </button>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Pagination Footer */}
+            {pagination.totalPages > 1 && (
+              <div className="flex items-center justify-between px-6 py-3 border-t border-slate-200 bg-slate-50 text-xs text-slate-600">
+                <span>
+                  Page {pagination.page} of {pagination.totalPages} ({pagination.total} total)
+                </span>
+                <div className="flex space-x-2">
+                  <button
+                    disabled={pagination.page <= 1}
+                    onClick={() => loadStudents(pagination.page - 1)}
+                    className="p-1 rounded border border-slate-300 disabled:opacity-40 cursor-pointer"
+                  >
+                    <ChevronLeft className="w-4 h-4" />
+                  </button>
+                  <button
+                    disabled={pagination.page >= pagination.totalPages}
+                    onClick={() => loadStudents(pagination.page + 1)}
+                    className="p-1 rounded border border-slate-300 disabled:opacity-40 cursor-pointer"
+                  >
+                    <ChevronRight className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </>
+      ) : (
+        /* Tab 2: Pending Parent Verifications */
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
+          <div className="p-4 border-b border-slate-200 bg-slate-50/50 flex justify-between items-center">
+            <div>
+              <h3 className="font-bold text-slate-800 text-sm">Parent School Verification Requests</h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Review and approve parent registration requests to grant student tracking & attendance access
+              </p>
+            </div>
+            <button
+              onClick={loadPendingRequests}
+              className="px-3 py-1.5 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg text-xs font-semibold transition cursor-pointer"
+            >
+              Refresh
+            </button>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead className="bg-slate-50 text-slate-600 font-bold border-b border-slate-200 uppercase tracking-wider">
+                <tr>
+                  <th className="px-6 py-3.5">Parent / Guardian Name</th>
+                  <th className="px-6 py-3.5">Contact Phone & Email</th>
+                  <th className="px-6 py-3.5">Requested Student Adm No</th>
+                  <th className="px-6 py-3.5">Matched Student Record</th>
+                  <th className="px-6 py-3.5">Status</th>
+                  <th className="px-6 py-3.5 text-right">Approve / Cancel</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {loadingPending ? (
+                  <tr>
+                    <td colSpan={6} className="py-12 text-center text-slate-400">Loading parent verification requests...</td>
+                  </tr>
+                ) : pendingRequests.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="py-12 text-center text-slate-400">
+                      No pending parent verification requests found.
+                    </td>
+                  </tr>
+                ) : (
+                  pendingRequests.map((req) => (
+                    <tr key={req.id} className="hover:bg-slate-50/80 transition">
+                      <td className="px-6 py-4 font-bold text-slate-800">
+                        {req.parent_name}
+                        <span className="block text-[10px] text-indigo-600 font-normal mt-0.5">
+                          Relationship: {req.relationship_type || 'Parent'}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 font-mono text-[11px] text-slate-600">
+                        <div>{req.parent_phone || req.user_phone}</div>
+                        <div className="text-slate-400 text-[10px]">{req.parent_email || req.user_email}</div>
+                      </td>
+                      <td className="px-6 py-4 font-mono font-bold text-indigo-700">
+                        {req.student_admission_number}
+                        {req.student_name && <span className="block text-[10px] text-slate-500 font-normal">({req.student_name})</span>}
+                      </td>
+                      <td className="px-6 py-4">
+                        {req.matched_student_name ? (
+                          <div className="text-emerald-700 font-semibold flex items-center space-x-1">
+                            <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
+                            <span>{req.matched_student_name} (Class {req.matched_student_grade}-{req.matched_student_section})</span>
+                          </div>
+                        ) : (
+                          <span className="text-amber-600 italic text-[11px]">
+                            ⚠️ No exact student record found for "{req.student_admission_number}"
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-6 py-4">
+                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                          req.status === 'PENDING' ? 'bg-amber-100 text-amber-800 border border-amber-200' :
+                          req.status === 'APPROVED' ? 'bg-emerald-100 text-emerald-800 border border-emerald-200' :
+                          'bg-rose-100 text-rose-800 border border-rose-200'
+                        }`}>
+                          {req.status}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 text-right space-x-2">
+                        {req.status === 'PENDING' ? (
+                          <>
+                            <button
+                              onClick={() => handleApproveRequest(req.id)}
+                              className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-semibold shadow-xs transition cursor-pointer"
+                            >
+                              Approve
+                            </button>
+                            <button
+                              onClick={() => handleCancelRequest(req.id)}
+                              className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-semibold shadow-xs transition cursor-pointer"
+                            >
+                              Cancel / Reject
+                            </button>
+                          </>
+                        ) : (
+                          <span className="text-slate-400 text-[11px] font-mono">
+                            {req.reviewed_at ? new Date(req.reviewed_at).toLocaleDateString() : 'Reviewed'}
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
       {/* QR Badge Modal */}
       {badgeStudentId && (
         <StudentQrBadgeModal

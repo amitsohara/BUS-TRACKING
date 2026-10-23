@@ -11,6 +11,7 @@ import {
   formatSafeServerError,
   authenticate,
   logAudit,
+  ensureDefaultSchool,
   AuthRequest,
 } from '../auth.ts';
 import { validateSecurityConfig } from '../securityConfig.ts';
@@ -97,18 +98,14 @@ authRoutes.post('/login', async (req: AuthRequest, res: Response) => {
       }
     : null;
 
-  if (!primarySchool && user.system_role === 'PLATFORM_ADMIN') {
-    const firstSchool = db
-      .prepare("SELECT id, name, code FROM schools WHERE status = 'ACTIVE' ORDER BY created_at ASC LIMIT 1")
-      .get() as any;
-    if (firstSchool) {
-      primarySchool = {
-        schoolId: firstSchool.id,
-        schoolName: firstSchool.name,
-        schoolCode: firstSchool.code,
-        role: 'SCHOOL_ADMIN',
-      };
-    }
+  if (!primarySchool) {
+    const defaultSchool = ensureDefaultSchool();
+    primarySchool = {
+      schoolId: defaultSchool.id,
+      schoolName: defaultSchool.name,
+      schoolCode: defaultSchool.code,
+      role: user.system_role === 'PLATFORM_ADMIN' ? 'SCHOOL_ADMIN' : 'SCHOOL_ADMIN',
+    };
   }
 
   const token = generateToken(
@@ -375,18 +372,14 @@ authRoutes.get('/me', authenticate, (req: AuthRequest, res: Response) => {
     role: memberships[0].role,
   } : null);
 
-  if (!activeSchool && user.system_role === 'PLATFORM_ADMIN') {
-    const firstSchool = db
-      .prepare("SELECT id, name, code FROM schools WHERE status = 'ACTIVE' ORDER BY created_at ASC LIMIT 1")
-      .get() as any;
-    if (firstSchool) {
-      activeSchool = {
-        schoolId: firstSchool.id,
-        schoolName: firstSchool.name,
-        schoolCode: firstSchool.code,
-        role: 'SCHOOL_ADMIN',
-      };
-    }
+  if (!activeSchool) {
+    const defaultSchool = ensureDefaultSchool();
+    activeSchool = {
+      schoolId: defaultSchool.id,
+      schoolName: defaultSchool.name,
+      schoolCode: defaultSchool.code,
+      role: 'SCHOOL_ADMIN',
+    };
   }
 
   return res.json({

@@ -178,10 +178,10 @@ reportRoutes.get(
 
       const manualOverrides = db
         .prepare(`
-          SELECT ae.*, s.full_name as student_name, s.admission_number, u.full_name as logged_by_name,
-            r.name as route_name, v.bus_number
+          SELECT ae.*, COALESCE(s.full_name, 'Unknown Student') as student_name, COALESCE(s.admission_number, 'N/A') as admission_number, COALESCE(u.full_name, 'System') as logged_by_name,
+            COALESCE(r.name, 'N/A') as route_name, COALESCE(v.bus_number, 'N/A') as bus_number
           FROM attendance_events ae
-          JOIN students s ON ae.student_id = s.id
+          LEFT JOIN students s ON ae.student_id = s.id
           LEFT JOIN trips t ON ae.trip_id = t.id
           LEFT JOIN routes r ON t.route_id = r.id
           LEFT JOIN vehicles v ON t.vehicle_id = v.id
@@ -194,27 +194,25 @@ reportRoutes.get(
 
       const speedAlerts = db
         .prepare(`
-          SELECT bl.*, t.id as trip_id, r.name as route_name, v.bus_number, d.full_name as driver_name,
-            COALESCE(ts.speed_limit_kmh, 45) as speed_limit_kmh
+          SELECT bl.*, t.id as trip_id, COALESCE(r.name, 'N/A') as route_name, COALESCE(v.bus_number, 'N/A') as bus_number, COALESCE(d.full_name, 'Driver') as driver_name,
+            COALESCE((SELECT ts.speed_limit_kmh FROM tenant_settings ts WHERE ts.school_id = t.school_id LIMIT 1), 45) as speed_limit_kmh
           FROM bus_locations bl
           JOIN trips t ON bl.trip_id = t.id
           LEFT JOIN routes r ON t.route_id = r.id
           LEFT JOIN vehicles v ON t.vehicle_id = v.id
           LEFT JOIN drivers d ON t.driver_id = d.id
-          LEFT JOIN tenant_settings ts ON t.school_id = ts.school_id
-          WHERE t.school_id = ? AND bl.speed_kmh > COALESCE(ts.speed_limit_kmh, 45)
+          WHERE t.school_id = ? AND CAST(bl.speed_kmh AS REAL) > COALESCE((SELECT ts.speed_limit_kmh FROM tenant_settings ts WHERE ts.school_id = t.school_id LIMIT 1), 45)
           ORDER BY bl.recorded_at DESC
           LIMIT 50
         `)
         .all(schoolId);
 
-      // Also fetch recent all attendance events (both QR and manual) for comprehensive view
       const allEvents = db
         .prepare(`
-          SELECT ae.*, s.full_name as student_name, s.admission_number, s.grade, s.section,
-            r.name as route_name, r.route_code, v.bus_number, rs.stop_name, u.full_name as scanned_by_name
+          SELECT ae.*, COALESCE(s.full_name, 'Unknown Student') as student_name, COALESCE(s.admission_number, 'N/A') as admission_number, COALESCE(s.grade, '') as grade, COALESCE(s.section, '') as section,
+            COALESCE(r.name, 'N/A') as route_name, COALESCE(r.route_code, 'N/A') as route_code, COALESCE(v.bus_number, 'N/A') as bus_number, COALESCE(rs.stop_name, 'N/A') as stop_name, COALESCE(u.full_name, 'System') as scanned_by_name
           FROM attendance_events ae
-          JOIN students s ON ae.student_id = s.id
+          LEFT JOIN students s ON ae.student_id = s.id
           LEFT JOIN trips t ON ae.trip_id = t.id
           LEFT JOIN routes r ON t.route_id = r.id
           LEFT JOIN vehicles v ON t.vehicle_id = v.id
@@ -226,7 +224,7 @@ reportRoutes.get(
         `)
         .all(schoolId);
 
-      return res.json({ success: true, manualOverrides, speedAlerts, allEvents });
+      return res.json({ success: true, manualOverrides: manualOverrides || [], speedAlerts: speedAlerts || [], allEvents: allEvents || [] });
     } catch (err: any) {
       return formatSafeServerError(res, err, 'FETCH_SAFETY_EXCEPTIONS');
     }

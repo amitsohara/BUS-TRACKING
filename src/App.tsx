@@ -29,6 +29,17 @@ export default function App() {
 
   useEffect(() => {
     checkActiveSession();
+
+    const handleSessionExpired = () => {
+      api.clearSession();
+      realtime.disconnect();
+      setSession(null);
+    };
+
+    window.addEventListener('sv_session_expired', handleSessionExpired);
+    return () => {
+      window.removeEventListener('sv_session_expired', handleSessionExpired);
+    };
   }, []);
 
   const checkActiveSession = async () => {
@@ -47,6 +58,7 @@ export default function App() {
           activeSchool: res.activeSchool,
           memberships: res.memberships || [],
         };
+        api.setSession(userSession);
         setSession(userSession);
         realtime.connect(token);
 
@@ -67,6 +79,7 @@ export default function App() {
   };
 
   const handleLoginSuccess = (newSession: UserSession) => {
+    api.setSession(newSession);
     setSession(newSession);
     realtime.connect(newSession.token);
     if (newSession.activeSchool?.role === 'DRIVER') {

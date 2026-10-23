@@ -31,16 +31,21 @@ class ApiService {
   private schoolId: string | null = null;
 
   constructor() {
-    this.token = localStorage.getItem('sv_auth_token');
-    this.schoolId = localStorage.getItem('sv_school_id');
+    const rawToken = localStorage.getItem('sv_auth_token');
+    this.token = rawToken && rawToken !== 'null' && rawToken !== 'undefined' ? rawToken : null;
+    const rawSchool = localStorage.getItem('sv_school_id');
+    this.schoolId = rawSchool && rawSchool !== 'null' && rawSchool !== 'undefined' ? rawSchool : null;
   }
 
   setSession(session: UserSession) {
     this.token = session.token;
     localStorage.setItem('sv_auth_token', session.token);
-    if (session.activeSchool) {
+    if (session.activeSchool && session.activeSchool.schoolId && session.activeSchool.schoolId !== 'null') {
       this.schoolId = session.activeSchool.schoolId;
       localStorage.setItem('sv_school_id', session.activeSchool.schoolId);
+    } else {
+      this.schoolId = null;
+      localStorage.removeItem('sv_school_id');
     }
   }
 
@@ -65,10 +70,10 @@ class ApiService {
       ...(options.headers as Record<string, string> || {}),
     };
 
-    if (this.token) {
+    if (this.token && this.token !== 'null' && this.token !== 'undefined') {
       headers['Authorization'] = `Bearer ${this.token}`;
     }
-    if (this.schoolId) {
+    if (this.schoolId && this.schoolId !== 'null' && this.schoolId !== 'undefined') {
       headers['x-school-id'] = this.schoolId;
     }
 
@@ -88,6 +93,12 @@ class ApiService {
     try {
       data = JSON.parse(text);
     } catch (_err) {
+      if (res.status === 401) {
+        this.clearSession();
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new Event('sv_session_expired'));
+        }
+      }
       if (!res.ok) {
         throw new Error(`Server returned HTTP ${res.status}. Please check backend logs.`);
       }
@@ -95,6 +106,12 @@ class ApiService {
     }
 
     if (!res.ok || data.success === false) {
+      if (res.status === 401 || data.error === 'TOKEN_EXPIRED_OR_INVALID' || data.error === 'UNAUTHORIZED') {
+        this.clearSession();
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new Event('sv_session_expired'));
+        }
+      }
       throw new Error(data.message || data.error || `HTTP ${res.status}`);
     }
 
@@ -455,6 +472,34 @@ class ApiService {
     return this.request('/parents/notifications/mark-read', {
       method: 'POST',
       body: JSON.stringify({ notificationId }),
+    });
+  }
+
+  requestSchoolVerification(payload: { schoolCode: string; studentAdmissionNumber: string; studentName?: string; parentName?: string; relationship?: string }) {
+    return this.request<{ success: boolean; message: string; requestId: string; schoolName: string }>('/parents/request-school-verification', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  getParentVerificationRequests() {
+    return this.request<{ success: boolean; requests: any[] }>('/parents/verification-requests');
+  }
+
+  getPendingVerifications() {
+    return this.request<{ success: boolean; count: number; requests: any[] }>('/schools/pending-verifications');
+  }
+
+  approveVerificationRequest(requestId: string) {
+    return this.request<{ success: boolean; message: string }>(`/schools/pending-verifications/${requestId}/approve`, {
+      method: 'POST',
+    });
+  }
+
+  cancelVerificationRequest(requestId: string, reason?: string) {
+    return this.request<{ success: boolean; message: string }>(`/schools/pending-verifications/${requestId}/cancel`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
     });
   }
 

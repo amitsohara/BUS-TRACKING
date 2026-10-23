@@ -202,3 +202,105 @@ parentRoutes.get('/children/:studentId/attendance', authenticate, (req: AuthRequ
   return res.json({ success: true, studentId, count: events.length, attendance: events });
 });
 
+// POST /api/v1/parents/request-school-verification - Parent requests link/verification with a school
+parentRoutes.post('/request-school-verification', authenticate, (req: AuthRequest, res: Response) => {
+  const userId = req.user!.id;
+  const { schoolCode, studentAdmissionNumber, studentName, parentName, relationship } = req.body;
+
+  if (!schoolCode || !studentAdmissionNumber) {
+    return res.status(400).json({
+      success: false,
+      error: 'VALIDATION_ERROR',
+      message: 'School Code and Student Admission Number are required.',
+    });
+  }
+
+  // Find target school
+  const school = db.prepare('SELECT id, name, code FROM schools WHERE LOWER(code) = LOWER(?) AND status = "ACTIVE"').get(schoolCode.trim()) as any;
+  if (!school) {
+    return res.status(404).json({
+      success: false,
+      error: 'SCHOOL_NOT_FOUND',
+      message: `No active school found with code "${schoolCode}". Please verify the code with your school administration.`,
+    });
+  }
+
+  // Check if a pending request already exists for this user and student admission
+  const existingReq = db
+    .prepare('SELECT id, status FROM parent_verification_requests WHERE user_id = ? AND school_id = ? AND LOWER(student_admission_number) = LOWER(?)')
+    .get(userId, school.id, studentAdmissionNumber.trim()) as any;
+
+  if (existingReq && existingReq.status === 'PENDING') {
+    return res.status(409).json({
+      success: false,
+      error: 'REQUEST_ALREADY_PENDING',
+      message: 'You already have a pending verification request for this school and admission number.',
+    });
+  }
+
+  const requestId = `pvr_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+  const user = db.prepare('SELECT full_name, phone, email FROM users WHERE id = ?').get(userId) as any;
+
+  const effectiveParentName = parentName || user?.full_name || 'Parent';
+  const effectiveParentPhone = user?.phone || '+91 98000 00000';
+  const effectiveParentEmail = user?.email || null;
+
+  db.exec('BEGIN TRANSACTION;');
+  try {
+    // 1. Insert verification request
+    db.prepare(`
+      INSERT INTO parent_verification_requests (id, school_id, user_id, parent_name, parent_phone, parent_email, student_admission_number, student_name, relationship_type, status)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING')
+    `).run(
+      requestId,
+      school.id,
+      userId,
+      effectiveParentName,
+      effectiveParentPhone,
+      effectiveParentEmail,
+      studentAdmissionNumber.trim(),
+      studentName ? studentName.trim() : null,
+      relationship || 'PARENT'
+    );
+
+    // 2. Ensure user has a PENDING membership for this school
+    const existingMem = db.prepare('SELECT id, status FROM school_memberships WHERE user_id = ? AND school_id = ?').get(userId, school.id) as any;
+    if (!existingMem) {
+      const memId = `mem_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+      db.prepare(`
+        INSERT INTO school_memberships (id, user_id, school_id, role, status)
+        VALUES (?, ?, ?, 'PARENT', 'PENDING')
+      `).run(memId, userId, school.id);
+    }
+
+    db.exec('COMMIT;');
+
+    return res.status(201).json({
+      success: true,
+      message: `Your registration request for ${school.name} has been submitted! Pending school administrator approval.`,
+      requestId,
+      schoolName: school.name,
+    });
+  } catch (err: any) {
+    try { db.exec('ROLLBACK;'); } catch (_) {}
+    console.error('[Parent Verification Request Error]', err);
+    return res.status(500).json({ success: false, error: 'SERVER_ERROR', message: 'Failed to submit verification request.' });
+  }
+});
+
+// GET /api/v1/parents/verification-requests - Get status of verification requests for parent
+parentRoutes.get('/verification-requests', authenticate, (req: AuthRequest, res: Response) => {
+  const userId = req.user!.id;
+  const requests = db
+    .prepare(`
+      SELECT pvr.*, s.name as school_name, s.code as school_code
+      FROM parent_verification_requests pvr
+      JOIN schools s ON pvr.school_id = s.id
+      WHERE pvr.user_id = ?
+      ORDER BY pvr.created_at DESC
+    `)
+    .all(userId);
+
+  return res.json({ success: true, requests });
+});
+

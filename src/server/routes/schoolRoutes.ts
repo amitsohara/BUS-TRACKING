@@ -391,6 +391,207 @@ schoolRoutes.get(
   }
 );
 
+// GET /api/v1/schools/pending-verifications - List all pending parent verification requests for active school
+schoolRoutes.get('/pending-verifications', authenticate, (req: AuthRequest, res: Response) => {
+  let schoolId = (req.headers['x-school-id'] as string) || req.schoolContext?.schoolId;
+
+  if (!schoolId && req.user?.systemRole === 'PLATFORM_ADMIN') {
+    const firstSchool = db.prepare("SELECT id FROM schools WHERE status = 'ACTIVE' ORDER BY created_at ASC LIMIT 1").get() as any;
+    if (firstSchool) schoolId = firstSchool.id;
+  }
+
+  if (!schoolId) {
+    return res.json({ success: true, requests: [] });
+  }
+
+  const requests = db
+    .prepare(`
+      SELECT 
+        pvr.*,
+        u.email as user_email,
+        u.full_name as user_full_name,
+        u.phone as user_phone,
+        st.id as matched_student_id,
+        st.full_name as matched_student_name,
+        st.grade as matched_student_grade,
+        st.section as matched_student_section
+      FROM parent_verification_requests pvr
+      JOIN users u ON pvr.user_id = u.id
+      LEFT JOIN students st ON pvr.school_id = st.school_id AND LOWER(pvr.student_admission_number) = LOWER(st.admission_number)
+      WHERE pvr.school_id = ?
+      ORDER BY CASE WHEN pvr.status = 'PENDING' THEN 1 ELSE 2 END, pvr.created_at DESC
+    `)
+    .all(schoolId);
+
+  return res.json({ success: true, count: requests.length, requests });
+});
+
+// POST /api/v1/schools/pending-verifications/:requestId/approve - Approve parent registration request
+schoolRoutes.post('/pending-verifications/:requestId/approve', authenticate, (req: AuthRequest, res: Response) => {
+  const { requestId } = req.params;
+  const adminUserId = req.user!.id;
+
+  const request = db.prepare('SELECT * FROM parent_verification_requests WHERE id = ?').get(requestId) as any;
+  if (!request) {
+    return res.status(404).json({ success: false, error: 'NOT_FOUND', message: 'Verification request not found.' });
+  }
+
+  const school = db.prepare('SELECT name FROM schools WHERE id = ?').get(request.school_id) as any;
+
+  db.exec('BEGIN TRANSACTION;');
+  try {
+    // 1. Mark request as APPROVED
+    db.prepare(`
+      UPDATE parent_verification_requests
+      SET status = 'APPROVED', reviewed_by_user_id = ?, reviewed_at = datetime('now'), updated_at = datetime('now')
+      WHERE id = ?
+    `).run(adminUserId, requestId);
+
+    // 2. Activate school membership for user
+    db.prepare(`
+      UPDATE school_memberships
+      SET status = 'ACTIVE'
+      WHERE user_id = ? AND school_id = ?
+    `).run(request.user_id, request.school_id);
+
+    // 3. Find matched student by admission number
+    const student = db
+      .prepare('SELECT id, full_name FROM students WHERE school_id = ? AND LOWER(admission_number) = LOWER(?)')
+      .get(request.school_id, request.student_admission_number.trim()) as any;
+
+    let guardianId: string | null = null;
+    // Find or create guardian profile
+    const existingGuardian = db.prepare('SELECT id FROM guardians WHERE user_id = ?').get(request.user_id) as any;
+    if (existingGuardian) {
+      guardianId = existingGuardian.id;
+    } else {
+      guardianId = `grd_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+      db.prepare(`
+        INSERT INTO guardians (id, user_id, full_name, phone, email, relationship)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).run(
+        guardianId,
+        request.user_id,
+        request.parent_name,
+        request.parent_phone,
+        request.parent_email,
+        request.relationship_type || 'PARENT'
+      );
+    }
+
+    // Link guardian to student if student exists
+    if (student && guardianId) {
+      const existingLink = db
+        .prepare('SELECT id FROM student_guardians WHERE student_id = ? AND guardian_id = ?')
+        .get(student.id, guardianId) as any;
+
+      if (!existingLink) {
+        const linkId = `sg_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+        db.prepare(`
+          INSERT INTO student_guardians (id, student_id, guardian_id, is_primary, can_pickup, relationship_type)
+          VALUES (?, ?, ?, 1, 1, ?)
+        `).run(linkId, student.id, guardianId, request.relationship_type || 'PARENT');
+      }
+    }
+
+    // 4. Send parent in-app notification
+    const notifId = `notif_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    db.prepare(`
+      INSERT INTO notifications (id, school_id, user_id, title, message, notification_type, delivery_status, channel, delivery_provider)
+      VALUES (?, ?, ?, 'School Registration Approved', ?, 'SYSTEM_ALERT', 'DELIVERED_IN_APP', 'IN_APP', 'SURAKSHAVAHAN_INTERNAL')
+    `).run(
+      notifId,
+      request.school_id,
+      request.user_id,
+      `Your registration request for ${school?.name || 'the school'} (Student Admission No: ${request.student_admission_number}) has been approved by the administration!`
+    );
+
+    db.exec('COMMIT;');
+
+    logAudit({
+      schoolId: request.school_id,
+      userId: adminUserId,
+      action: 'PARENT_VERIFICATION_APPROVED',
+      entityType: 'PARENT_VERIFICATION_REQUEST',
+      entityId: requestId,
+      newValues: { parentName: request.parent_name, studentAdmission: request.student_admission_number },
+    });
+
+    return res.json({
+      success: true,
+      message: `Parent verification request for ${request.parent_name} approved successfully. Student access linked.`,
+    });
+  } catch (err: any) {
+    try { db.exec('ROLLBACK;'); } catch (_) {}
+    console.error('[Approve Verification Error]', err);
+    return res.status(500).json({ success: false, error: 'SERVER_ERROR', message: 'Failed to approve verification request.' });
+  }
+});
+
+// POST /api/v1/schools/pending-verifications/:requestId/cancel - Cancel / Reject parent registration request
+schoolRoutes.post('/pending-verifications/:requestId/cancel', authenticate, (req: AuthRequest, res: Response) => {
+  const { requestId } = req.params;
+  const { reason } = req.body;
+  const adminUserId = req.user!.id;
+
+  const request = db.prepare('SELECT * FROM parent_verification_requests WHERE id = ?').get(requestId) as any;
+  if (!request) {
+    return res.status(404).json({ success: false, error: 'NOT_FOUND', message: 'Verification request not found.' });
+  }
+
+  const school = db.prepare('SELECT name FROM schools WHERE id = ?').get(request.school_id) as any;
+  const rejectionReason = reason || 'Declined by school administration.';
+
+  db.exec('BEGIN TRANSACTION;');
+  try {
+    // 1. Mark request as REJECTED
+    db.prepare(`
+      UPDATE parent_verification_requests
+      SET status = 'REJECTED', rejection_reason = ?, reviewed_by_user_id = ?, reviewed_at = datetime('now'), updated_at = datetime('now')
+      WHERE id = ?
+    `).run(rejectionReason, adminUserId, requestId);
+
+    // 2. Revoke pending school membership
+    db.prepare(`
+      UPDATE school_memberships
+      SET status = 'REVOKED'
+      WHERE user_id = ? AND school_id = ? AND status = 'PENDING'
+    `).run(request.user_id, request.school_id);
+
+    // 3. Send parent notification
+    const notifId = `notif_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    db.prepare(`
+      INSERT INTO notifications (id, school_id, user_id, title, message, notification_type, delivery_status, channel, delivery_provider)
+      VALUES (?, ?, ?, 'School Registration Cancelled', ?, 'SYSTEM_ALERT', 'DELIVERED_IN_APP', 'IN_APP', 'SURAKSHAVAHAN_INTERNAL')
+    `).run(
+      notifId,
+      request.school_id,
+      request.user_id,
+      `Your registration request for ${school?.name || 'the school'} was cancelled/declined by the school administration. Reason: ${rejectionReason}`
+    );
+
+    db.exec('COMMIT;');
+
+    logAudit({
+      schoolId: request.school_id,
+      userId: adminUserId,
+      action: 'PARENT_VERIFICATION_REJECTED',
+      entityType: 'PARENT_VERIFICATION_REQUEST',
+      entityId: requestId,
+      newValues: { parentName: request.parent_name, rejectionReason },
+    });
+
+    return res.json({
+      success: true,
+      message: `Verification request for ${request.parent_name} has been cancelled/declined.`,
+    });
+  } catch (err: any) {
+    try { db.exec('ROLLBACK;'); } catch (_) {}
+    console.error('[Cancel Verification Error]', err);
+    return res.status(500).json({ success: false, error: 'SERVER_ERROR', message: 'Failed to cancel verification request.' });
+  }
+});
+
 // GET /api/v1/schools/:id - Detailed school view with associated admins, invitations, and audit history
 schoolRoutes.get('/:id', authenticate, (req: AuthRequest, res: Response) => {
   const targetSchoolId = req.params.id;
@@ -1039,3 +1240,4 @@ schoolRoutes.put(
     return res.json({ success: true, message: 'Settings saved successfully' });
   }
 );
+
