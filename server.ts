@@ -107,7 +107,8 @@ async function startServer() {
     })
   );
 
-  app.use(express.json({ limit: '2mb' }));
+  app.use(express.json({ limit: '2mb', inflate: false }));
+  app.use(express.urlencoded({ extended: true, limit: '2mb', inflate: false }));
 
   // Request logger (clean, no PII)
   app.use((req, res, next) => {
