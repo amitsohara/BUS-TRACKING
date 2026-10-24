@@ -195,13 +195,14 @@ reportRoutes.get(
       const speedAlerts = db
         .prepare(`
           SELECT bl.*, t.id as trip_id, COALESCE(r.name, 'N/A') as route_name, COALESCE(v.bus_number, 'N/A') as bus_number, COALESCE(d.full_name, 'Driver') as driver_name,
-            COALESCE((SELECT ts.speed_limit_kmh FROM tenant_settings ts WHERE ts.school_id = t.school_id LIMIT 1), 45) as speed_limit_kmh
+            COALESCE(ts.speed_limit_kmh, 45) as speed_limit_kmh
           FROM bus_locations bl
           JOIN trips t ON bl.trip_id = t.id
+          LEFT JOIN tenant_settings ts ON ts.school_id = t.school_id
           LEFT JOIN routes r ON t.route_id = r.id
           LEFT JOIN vehicles v ON t.vehicle_id = v.id
           LEFT JOIN drivers d ON t.driver_id = d.id
-          WHERE t.school_id = ? AND CAST(bl.speed_kmh AS REAL) > COALESCE((SELECT ts.speed_limit_kmh FROM tenant_settings ts WHERE ts.school_id = t.school_id LIMIT 1), 45)
+          WHERE t.school_id = ? AND CAST(COALESCE(bl.speed_kmh, 0) AS REAL) > COALESCE(ts.speed_limit_kmh, 45)
           ORDER BY bl.recorded_at DESC
           LIMIT 50
         `)
